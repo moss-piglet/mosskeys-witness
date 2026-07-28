@@ -19,5 +19,6 @@ mod ac;
 mod cs;
 mod gi;
 mod mp;
+mod sm;
 mod st;
 mod support;
