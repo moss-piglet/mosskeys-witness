@@ -90,11 +90,11 @@ works before any proof verification).
 
 | ID | Level | Requirement | Spec section | Status |
 |----|-------|-------------|--------------|--------|
-| MP-01 | SHOULD | Serve a recent checkpoint for each cosigned log at `GET <monitoring prefix>/<origin hash>/checkpoint` | Monitor Retrieval | ⬜ |
-| MP-02 | MUST | `<origin hash>` = lowercase hex of SHA-256 over the log's origin (the checkpoint origin line's content, without its trailing newline) | Monitor Retrieval | ⬜ |
-| MP-03 | MUST | Response body is a checkpoint including the witness cosignature(s) returned from add-checkpoint **and** the log signature(s) the witness verified | Monitor Retrieval | ⬜ |
-| MP-04 | MUST | Never cosigned a checkpoint for that origin hash → 404 | Monitor Retrieval | ⬜ |
-| MP-05 | SHOULD NOT | Do not delay checkpoint updates by more than one hour (we serve synchronously from the same store, so delay is ~0) | Monitor Retrieval | ⬜ |
+| MP-01 | SHOULD | Serve a recent checkpoint for each cosigned log at `GET <monitoring prefix>/<origin hash>/checkpoint` | Monitor Retrieval | ✅ |
+| MP-02 | MUST | `<origin hash>` = lowercase hex of SHA-256 over the log's origin (the checkpoint origin line's content, without its trailing newline) | Monitor Retrieval | ✅ |
+| MP-03 | MUST | Response body is a checkpoint including the witness cosignature(s) returned from add-checkpoint **and** the log signature(s) the witness verified | Monitor Retrieval | ✅ |
+| MP-04 | MUST | Never cosigned a checkpoint for that origin hash → 404 | Monitor Retrieval | ✅ |
+| MP-05 | SHOULD NOT | Do not delay checkpoint updates by more than one hour (we serve synchronously from the same store, so delay is ~0) | Monitor Retrieval | ✅ (same-store synchronous serving is the mechanism) |
 
 ## 7. Out of scope for v0 (documented as future work)
 
