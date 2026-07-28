@@ -57,9 +57,10 @@ cosigned checkpoint A (size N, different root), or races A and B concurrently.
   rejects rewinds with 409 + `text/x.tlog.size` (ST-06).
 - Persist-before-respond: the cosignature is never sent for a checkpoint the
   store has not durably recorded (SM-01, SM-05).
-- Property test in the conformance suite: under randomized concurrent valid
-  submissions, the set of cosigned checkpoints for one origin is always a
-  single chain (no two cosigned heads at one size) (SM-04).
+- Conformance-suite adversarial matrix + concurrent-race test: same-size
+  forks, forks smuggled under larger sizes, rewinds, and racing valid
+  submissions never produce two cosigned heads at one size, and the store
+  and monitoring prefix show no trace of any rejected attempt (SM-04, I1).
 
 ### T2. Signing-key compromise (catastrophic)
 

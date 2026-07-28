@@ -52,7 +52,7 @@ the checklist ID it covers, e.g. `// covers AC-04`.
 | ST-08 | MUST | `old size == 0` but consistency proof is non-empty → 422 | `422 Unprocessable Entity` | ✅ |
 | ST-09 | MUST | Consistency proof does not verify per RFC 6962 §2.1.2 → 422 | `422 Unprocessable Entity` | ✅ |
 | ST-10 | MUST | `old size == checkpoint size` but root hashes differ → 422 | `422 Unprocessable Entity` | ✅ |
-| ST-11 | MAY | Origin known + signature valid but consistency check failed → request MAY be logged as misbehavior evidence; checkpoint MUST NOT be cosigned | — | 🟡 (logged to stderr; not yet machine-asserted) |
+| ST-11 | MAY | Origin known + signature valid but consistency check failed → request MAY be logged as misbehavior evidence; checkpoint MUST NOT be cosigned | — | ✅ (stderr evidence line machine-asserted in `st::st_11_…` — subprocess test) |
 | ST-12 | MUST | All checks pass → update latest-checkpoint record, respond 200 with one or more note signature lines, each starting `—` (U+2014), ending `\n` | `200 Success` | ✅ |
 
 Evaluation-order note: the spec fixes origin lookup (404) before signature
@@ -83,8 +83,8 @@ works before any proof verification).
 | SM-01 | MUST | Persist the new checkpoint **before** responding | add-checkpoint | ✅ |
 | SM-02 | MUST | Old-size check and state update are atomic per origin (no check-then-update race; see spec's A/B rollback example) | add-checkpoint | ✅ |
 | SM-03 | MUST | Only the latest checkpoint per origin is required to be tracked (we store exactly that, plus the cosigned note for serving) | Introduction | ✅ |
-| SM-04 | — | Never cosign two conflicting checkpoints at one size (consequence of ST-06 + ST-10 + SM-02; stated as its own invariant and property-tested) | — | 🟡 (holds by construction; property test lands with task 7) |
-| SM-05 | — | Crash safety: a crash after persist but before respond is safe — the client retries, gets 409 with the now-current size, and can rebase | — | 🟡 (holds by construction; fault-injection test lands with task 7) |
+| SM-04 | — | Never cosign two conflicting checkpoints at one size (consequence of ST-06 + ST-10 + SM-02; stated as its own invariant and property-tested) | — | ✅ (adversarial fork-attempt matrix + concurrent-race test in `sm.rs`, I1) |
+| SM-05 | — | Crash safety: a crash after persist but before respond is safe — the client retries, gets 409 with the now-current size, and can rebase | — | ✅ (crash-retry flow: restart, 409, rebase in `sm.rs`, I2) |
 
 ## 6. Monitoring prefix
 
