@@ -17,6 +17,18 @@ readme = "README.md"
 # strip the `path` key via .github/scripts/decouple-from-siblings.sh and
 # resolve the pinned version from crates.io.
 metamorphic-log = { version = "=0.4.0", path = "../metamorphic-log" }
+# Single source of truth for cryptographic primitives (keypair generation).
+# Pure crates.io dependency: metamorphic-log resolves the same registry
+# version, so there is exactly ONE crypto core in the graph.
+metamorphic-crypto = "=0.10.7"
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+base64 = "0.22"
+thiserror = "2"
+zeroize = "1"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 # Long-running network daemon: optimize for throughput, keep unwinding so a

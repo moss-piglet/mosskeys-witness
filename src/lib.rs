@@ -18,6 +18,8 @@
 //! protocol, the atomic per-log state store, and key management. The design
 //! invariants are in `docs/spec-conformance.md` and `docs/threat-model.md`.
 
+pub mod keygen;
+
 #[cfg(test)]
 mod tests {
     /// Smoke test: the metamorphic-log cosignature vkey surface this witness
