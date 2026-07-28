@@ -21,6 +21,7 @@
 pub mod config;
 pub mod keygen;
 pub mod store;
+pub mod witness;
 
 #[cfg(test)]
 mod tests {
