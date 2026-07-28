@@ -7,7 +7,7 @@ They are gated because they need a Go toolchain and module downloads.
 | Row | External verifier | What it proves |
 |-----|-------------------|----------------|
 | omniwitness | `golang.org/x/mod/sumdb/note` (the signed-note library omniwitness is built on) with a `cosignature/v1` verifier — the same construction transparency-dev's witness package verifies for every checkpoint it countersigns | Our served checkpoint parses as a signed note; the log signature verifies; **our `0x04` cosignature verifies**; the witness key id matches the spec formula (CS-08); our `0x06` line is ignored as an unknown key, exactly as deployed tooling ignores types it does not know |
-| sigsum | `sigsum.org/sigsum-go` v0.14.1 `pkg/checkpoint` (`FromASCII`, `Verify`, `CosignatureLinesFromASCII`, `VerifyCosignatureByKey`, `NewWitnessKeyId`) | sigsum-go parses our checkpoint, verifies the log signature, **verifies our `0x04` cosignature by key**, and its witness key-id formula agrees with our vkey (CS-08). (Its `ContentTypeTlogSize` constant is byte-identical to our 409 content type, pinned in the conformance suite's ST-06 test.) |
+| sigsum | `sigsum.org/sigsum-go` v0.14.1 `pkg/checkpoint` (`FromASCII`, `Verify`, `CosignatureLinesFromASCII`, `VerifyCosignatureByKey`, `NewWitnessKeyId`) | sigsum-go parses our checkpoint, verifies the log signature, **verifies our `0x04` cosignature by key**, and its witness key-id formula agrees with our vkey (CS-08). (Its `ContentTypeTlogSize` constant is byte-identical to our 409 content type, pinned in the conformance suite's ST-06 test.) The test log's origin follows the sigsum convention (`sigsum.org/v1/tree/<sha256(pubkey)>`) — `pkg/checkpoint` reconstructs the signed checkpoint text from the log key under that origin, so a sigsum-convention log is the only shape its log-signature verification supports, and the real deployment shape: our witness cosigning for a sigsum log. |
 
 The tests drive the real `mosskeys-witness` binary: submit a checkpoint over
 loopback TCP, fetch the cosigned note from the monitoring prefix, and hand
@@ -41,8 +41,8 @@ green run.
 
 - The sigsum verifier is written against the documented
   `sigsum.org/sigsum-go@v0.14.1/pkg/checkpoint` API (pinned in
-  `scripts/interop/go.mod`). It has not yet been compiled in this repo's CI;
-  if a future sigsum-go changes that API, pin or adapt in
+  `scripts/interop/go.mod`) and has run green against that version; if a
+  future sigsum-go changes that API, pin or adapt in
   `scripts/interop/sigsum/main.go`.
 - Fuller manual flows (not gated tests):
   - **omniwitness multi-homing**: our config is a plain `(origin, vkey)`
