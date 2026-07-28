@@ -16,6 +16,7 @@
 //! comment instead of re-asserting every detail.
 
 mod ac;
+mod cs;
 mod gi;
 mod mp;
 mod st;
