@@ -1,7 +1,8 @@
-//! The HTTP surface: one listener serving the submission prefix
-//! (`POST /add-checkpoint`) — and, from the next task, the monitoring
-//! prefix on the same listener (GI-04) — with the threat model's T4
-//! hardening applied (GI-01…GI-03).
+//! The HTTP surface: one listener serving both the submission prefix
+//! (`POST /add-checkpoint`) and the monitoring prefix
+//! (`GET /<origin hash>/checkpoint`, MP-01) — the single-listener layout
+//! GI-04 permits — with the threat model's T4 hardening applied
+//! (GI-01…GI-03).
 //!
 //! Deliberately thin: every protocol decision lives in [`crate::witness`];
 //! this module only renders the taxonomy onto the wire and owns the
@@ -14,9 +15,10 @@
 //! - **Bounded in-flight concurrency** (T4), with HTTP keep-alive retained
 //!   (GI-03): latency-friendly for the log↔witness long-tail, cheap under
 //!   flood.
-//! - **POST-only** routing for `/add-checkpoint` (GI-02); everything else
-//!   falls through to `404`, unimplemented spec routes (`sign-subtree`)
-//!   included (v0 out-of-scope, see docs/spec-conformance.md §7).
+//! - **Method-strict** routing: POST-only for `/add-checkpoint` (GI-02),
+//!   GET-only for the monitoring path; everything else falls through to
+//!   `404`, unimplemented spec routes (`sign-subtree`) included (v0
+//!   out-of-scope, see docs/spec-conformance.md §7).
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -24,10 +26,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::extract::{DefaultBodyLimit, Path as PathParam, Request, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use hyper::body::Incoming;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
@@ -63,6 +65,11 @@ const MAX_CONCURRENT_REQUESTS: usize = 512;
 pub fn router(witness: Witness) -> Router {
     Router::new()
         .route("/add-checkpoint", post(add_checkpoint))
+        // MP-01: the monitoring prefix on the same listener (GI-04).
+        // Registered alongside the POST route, BEFORE the layers below —
+        // axum layers only wrap routes registered before them, and the T4
+        // timeout/concurrency bounds must cover this route too.
+        .route("/{origin_hash}/checkpoint", get(latest_checkpoint))
         // Layers apply outward-in: the concurrency bound is the cheap outer
         // gate, then the request timeout, then the body cap at extraction.
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -87,6 +94,42 @@ async fn add_checkpoint(State(witness): State<Arc<Witness>>, body: String) -> Re
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// `GET /<origin hash>/checkpoint` (MP-01): the monitoring prefix. Serves
+/// the stored cosigned note **verbatim** — nothing is reconstructed or
+/// re-signed (MP-03), and the read is synchronous from the same store the
+/// submission path writes, so the served head is never stale (MP-05).
+async fn latest_checkpoint(
+    State(witness): State<Arc<Witness>>,
+    PathParam(origin_hash): PathParam<String>,
+) -> Response {
+    // MP-02: the origin hash is exactly 64 lowercase-hex chars (SHA-256).
+    // Any other shape can never equal a hash the store computed, so it
+    // misses the lookup either way — this guard is only a cheap fast path,
+    // and 404 remains the single permitted outcome for every miss.
+    if !is_origin_hash(&origin_hash) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match witness.latest_by_origin_hash(&origin_hash) {
+        // MP-03: the note already carries the checkpoint text, the log
+        // signature(s) the witness verified, and our two cosignature lines,
+        // and ends in '\n'. The spec mandates no Content-Type here, so the
+        // String default (text/plain; charset=utf-8) stands.
+        Some(state) => state.note.into_response(),
+        // MP-04: never cosigned a checkpoint for this origin hash.
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// The MP-02 shape: exactly 64 lowercase-hex characters (SHA-256). Inputs
+/// of any other shape (uppercase, wrong length, non-hex) cannot match a
+/// computed hash, so they 404 without touching the store.
+fn is_origin_hash(param: &str) -> bool {
+    param.len() == 64
+        && param
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() && b <= b'f')
 }
 
 /// Render the spec's status taxonomy onto the wire (I5).
@@ -148,7 +191,7 @@ pub async fn run(config_path: &Path) -> Result<(), RunError> {
             addr: listen,
             source: e,
         })?;
-    eprintln!("  listening on {listen} — POST /add-checkpoint");
+    eprintln!("  listening on {listen} — POST /add-checkpoint, GET /<origin hash>/checkpoint");
 
     serve(listener, router(witness)).await;
     eprintln!("mosskeys-witness: stopped");

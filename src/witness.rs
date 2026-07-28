@@ -300,6 +300,13 @@ impl Witness {
         self.store.latest(origin)
     }
 
+    /// The latest cosigned state for the log whose **origin hash**
+    /// (lowercase hex SHA-256 of the origin, MP-02) is `origin_hash_hex`.
+    /// The monitoring prefix's only lookup (MP-01/MP-04): a miss is a 404.
+    pub fn latest_by_origin_hash(&self, origin_hash_hex: &str) -> Option<LogState> {
+        self.store.latest_by_origin_hash(origin_hash_hex)
+    }
+
     /// Handle one `add-checkpoint` request body end to end, returning the
     /// response body (the two cosignature lines) on success.
     ///
