@@ -20,6 +20,7 @@
 
 pub mod config;
 pub mod keygen;
+pub mod server;
 pub mod store;
 pub mod witness;
 

@@ -52,6 +52,8 @@ pub struct Cli {
 pub enum Command {
     /// Mint the witness's two cosigner keypairs (Ed25519 + ML-DSA-44).
     Keygen(KeygenArgs),
+    /// Run the witness HTTP service (submission + monitoring prefixes).
+    Run(RunArgs),
 }
 
 /// `mosskeys-witness keygen` — generate both cosigner keypairs locally.
@@ -86,4 +88,31 @@ pub struct KeygenArgs {
     /// (created `0700` if missing; existing seed files are never overwritten).
     #[arg(long, short = 'o', value_name = "DIR")]
     pub out_dir: PathBuf,
+}
+
+/// `mosskeys-witness run` — start the witness HTTP service.
+///
+/// Loads the TOML config, applies every startup hard-check (owner-only seed
+/// files whose derived vkeys match the configured witness name, duplicate
+/// origins fatal, state file exclusive-locked and replayed), then serves
+/// `POST /add-checkpoint` — and the monitoring prefix — on one listener
+/// until SIGINT/SIGTERM. Any check failure is fatal (fail closed, I4).
+#[derive(Debug, Args)]
+#[command(after_long_help = "EXAMPLES:\n\
+    \x20   # Mint the identity, then write a config (see config.example.toml)\n\
+    \x20   mosskeys-witness keygen --name witness.example/w1 --out-dir ./keys\n\
+    \x20   mosskeys-witness run --config ./witness.toml\n\
+    \n\
+    \x20   # Submit a checkpoint from a log (what the service answers):\n\
+    \x20   curl -X POST --data-binary @request.txt http://127.0.0.1:8080/add-checkpoint\n\
+    \n\
+    CONFIG:\n\
+    \x20   The config is a plain (origin, vkey) allowlist like omniwitness/sigsum\n\
+    \x20   operators already maintain — unknown origins are 404 by construction.\n\
+    \x20   See config.example.toml for the annotated template.")]
+pub struct RunArgs {
+    /// Path to the TOML config file (witness name, seed paths, listen
+    /// address, state file, and the [[log]] origin+vkey allowlist).
+    #[arg(long, short = 'c', value_name = "FILE")]
+    pub config: PathBuf,
 }

@@ -12,6 +12,28 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Keygen(args) => run_keygen(&args, cli.json),
+        Command::Run(args) => run_server(&args),
+    }
+}
+
+fn run_server(args: &cli::RunArgs) -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("mosskeys-witness")
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!("error: failed to start the async runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match runtime.block_on(mosskeys_witness::server::run(&args.config)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
