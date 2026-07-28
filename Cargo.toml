@@ -1,0 +1,27 @@
+[package]
+name = "mosskeys-witness"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Post-quantum-native C2SP tlog-witness: dual-signs transparency log checkpoints with Ed25519 (0x04) and ML-DSA-44 (0x06) cosignatures, built on the audited metamorphic-log crate."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/moss-piglet/mosskeys-witness"
+homepage = "https://mosskeys.com"
+keywords = ["transparency-log", "witness", "post-quantum", "ml-dsa-44", "c2sp"]
+categories = ["cryptography", "network-programming"]
+readme = "README.md"
+
+[dependencies]
+# The audited transparency-log + cosignature stack. Local co-development
+# resolves the sibling working tree (`../metamorphic-log`); CI and releases
+# strip the `path` key via .github/scripts/decouple-from-siblings.sh and
+# resolve the pinned version from crates.io.
+metamorphic-log = { version = "=0.4.0", path = "../metamorphic-log" }
+
+[profile.release]
+# Long-running network daemon: optimize for throughput, keep unwinding so a
+# panicking request task cannot take down the witness (see docs/threat-model.md
+# T5). No panic = "abort" here on purpose.
+lto = true
+codegen-units = 1
+strip = true

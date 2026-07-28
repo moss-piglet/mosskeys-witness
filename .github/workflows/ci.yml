@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Resolve metamorphic-log from crates.io instead of the sibling working
+      # tree the local Cargo.toml points at (that path does not exist on a CI
+      # runner). See the script header for detail.
+      - name: Decouple from sibling working trees
+        run: ./.github/scripts/decouple-from-siblings.sh
+
+      # @stable intentionally tracks the current stable channel for CI.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      # Re-add metamorphic-log to Cargo.lock from crates.io (the decouple step
+      # removed its sibling-path entry). Its exact version is pinned in
+      # Cargo.toml, so this is deterministic and leaves every other locked
+      # dependency untouched; the `--locked` build then holds.
+      - name: Resolve sibling crates from crates.io
+        run: cargo fetch
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked
+
+  deny:
+    # cargo-deny: license allowlist, banned/duplicate crates, registry-source
+    # policy, advisory database — the dependency-hygiene gate. Installed from
+    # source with --locked rather than via a third-party action, matching the
+    # supply-chain posture in docs/threat-model.md (T7).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Decouple from sibling working trees
+        run: ./.github/scripts/decouple-from-siblings.sh
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Resolve sibling crates from crates.io
+        run: cargo fetch
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: cargo deny check
+        run: cargo deny check
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Decouple from sibling working trees
+        run: ./.github/scripts/decouple-from-siblings.sh
+      # Restore the metamorphic-log entry the decouple step removed, so
+      # cargo-audit can resolve a complete Cargo.lock.
+      - name: Resolve sibling crates from crates.io
+        run: cargo fetch
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  msrv:
+    # Verify the crate still builds on its declared MSRV (rust-version in
+    # Cargo.toml), so the "1.85" promise to downstream users stays honest.
+    # The release pipeline builds with a newer toolchain; this guards the floor.
+    name: MSRV (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Decouple from sibling working trees
+        run: ./.github/scripts/decouple-from-siblings.sh
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Resolve sibling crates from crates.io
+        run: cargo fetch
+      - name: Build on MSRV
+        run: cargo build --locked

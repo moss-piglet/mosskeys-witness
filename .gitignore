@@ -1,0 +1,14 @@
+/target
+Cargo.lock.orig
+*.swp
+.DS_Store
+
+# Never commit witness key material or state that may land here during local
+# testing (see docs/threat-model.md T2/T3).
+*.seed
+*.key
+*.token
+witness.toml
+witness.db
+witness.db-*
+state/
