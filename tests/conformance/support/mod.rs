@@ -47,6 +47,22 @@ impl TestLog {
         }
     }
 
+    /// A log identity whose origin follows the sigsum convention
+    /// (`sigsum.org/v1/tree/<hex sha256 of the public key>`). sigsum-go's
+    /// pkg/checkpoint reconstructs the signed checkpoint text from the log
+    /// public key under exactly that origin, so it only verifies log
+    /// signatures for sigsum-convention logs — the §8 sigsum row uses one.
+    pub fn sigsum() -> Self {
+        let (seed, pk) = metamorphic_crypto::ed25519_generate_keypair();
+        TestLog {
+            origin: format!(
+                "sigsum.org/v1/tree/{}",
+                hex(&metamorphic_crypto::hash::sha256(&pk))
+            ),
+            seed,
+        }
+    }
+
     pub fn vkey(&self) -> String {
         let pk = metamorphic_crypto::ed25519_public_key(&self.seed).unwrap();
         VerifierKey::new_ed25519(&self.origin, &pk)
@@ -361,8 +377,13 @@ pub struct WitnessProcess {
 
 impl WitnessProcess {
     pub fn spawn() -> Self {
+        Self::spawn_with_log(TestLog::new(LOG_ORIGIN))
+    }
+
+    /// Spawn with an explicit log identity (§8's sigsum row needs a
+    /// sigsum-convention origin — see `TestLog::sigsum`).
+    pub fn spawn_with_log(log: TestLog) -> Self {
         let dir = TempDir::new().unwrap();
-        let log = TestLog::new(LOG_ORIGIN);
 
         let keys_dir = dir.path().join("keys");
         let identity = keygen::generate(WITNESS_NAME, &keys_dir).unwrap();
@@ -392,12 +413,13 @@ ed25519_seed = "{}"
 mldsa44_seed = "{}"
 
 [[log]]
-origin = "{LOG_ORIGIN}"
+origin = "{}"
 vkeys = ["{}"]
 "#,
                 state_file.display(),
                 keys_dir.join("ed25519.seed").display(),
                 keys_dir.join("mldsa44.seed").display(),
+                log.origin,
                 log.vkey(),
             ),
         )

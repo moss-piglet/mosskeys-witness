@@ -4,8 +4,8 @@
 // the signed-note library omniwitness is built on.
 //
 // The 0x06 ML-DSA-44 line in the note is from an unknown key as far as this
-// program is concerned and is ignored, exactly as omniwitness would ignore
-// cosignature types it does not know.
+// program is concerned: recorded as unverified, never fatal — deployed
+// tooling ignores cosignature types it does not know.
 //
 // Usage: go run ./omniwitness <checkpoint note file> <witness vkey> <log vkey>
 package main
@@ -90,7 +90,7 @@ func main() {
 	}
 
 	cosig := cosigVerifier{name: name, keyHash: keyHash, pk: ed25519.PublicKey(raw[1:])}
-	opened, err := note.Open(noteBytes, []note.Verifier{logVerifier, cosig})
+	opened, err := note.Open(noteBytes, note.VerifierList(logVerifier, cosig))
 	if err != nil {
 		fatal("note verification failed: %v", err)
 	}
@@ -105,6 +105,12 @@ func main() {
 	}
 	if !foundCosig {
 		fatal("the witness cosignature did not verify")
+	}
+	// The 0x06 ML-DSA-44 line is from an unknown key here: recorded as
+	// unverified, never fatal — deployed tooling ignores types it does
+	// not know.
+	if len(opened.UnverifiedSigs) != 1 {
+		fatal("want 1 unverified signature (the 0x06 ML-DSA-44 line), got %d", len(opened.UnverifiedSigs))
 	}
 
 	origin, _, _ := strings.Cut(opened.Text, "\n")

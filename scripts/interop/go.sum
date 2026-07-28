@@ -1,0 +1,6 @@
+github.com/golang/mock v1.6.0 h1:ErTB+efbowRARo13NNdxyJji2egdxLGQhRaY+DUumQc=
+github.com/golang/mock v1.6.0/go.mod h1:p6yTPP+5HYm5mzsMV8JkE6ZKdX+/wYM6Hr+LicevLPs=
+golang.org/x/mod v0.35.0 h1:Ww1D637e6Pg+Zb2KrWfHQUnH2dQRLBQyAtpr/haaJeM=
+golang.org/x/mod v0.35.0/go.mod h1:+GwiRhIInF8wPm+4AoT6L0FA1QWAad3OMdTRx4tFYlU=
+sigsum.org/sigsum-go v0.14.1 h1:MlqZDJlXFEYTnCSqWQE/QQNUsCDEXb0UZSmTgGilkm4=
+sigsum.org/sigsum-go v0.14.1/go.mod h1:GTdCHxR7xew3wRIu3BkLo3XFEGdC0WsaXKH2fadPBoI=

@@ -46,17 +46,28 @@ func main() {
 		fatal("witness vkey key id mismatch: declared %x, sigsum-go computed %x", witnessKey.KeyId, got)
 	}
 
-	// The checkpoint (origin, size, root, log signature), then the
-	// cosignature lines — the same parse order sigsum's own witness uses.
-	reader := strings.NewReader(string(noteBytes))
+	// Split the note at the blank line: the checkpoint text above it, the
+	// signature lines below it. cp.FromASCII consumes every signature line
+	// (the cosignatures are skipped as unwanted), so the cosignature lines
+	// are parsed separately from the section below the blank line —
+	// CosignatureLinesFromASCII rejects the non-signature text lines.
+	_, sigLines, found := strings.Cut(string(noteBytes), "\n\n")
+	if !found {
+		fatal("malformed note: no blank line before the signatures")
+	}
+
 	var cp checkpoint.Checkpoint
-	if err := cp.FromASCII(reader); err != nil {
+	if err := cp.FromASCII(strings.NewReader(string(noteBytes))); err != nil {
 		fatal("parse checkpoint: %v", err)
 	}
+	// pkg/checkpoint reconstructs the signed checkpoint text from the log
+	// public key with the sigsum origin convention
+	// (sigsum.org/v1/tree/<sha256(pubkey)>), so this only verifies for a
+	// log whose origin follows that convention — the test's log does.
 	if err := cp.Verify(&logKey.PublicKey); err != nil {
 		fatal("log signature verification failed: %v", err)
 	}
-	cosigs, err := checkpoint.CosignatureLinesFromASCII(reader)
+	cosigs, err := checkpoint.CosignatureLinesFromASCII(strings.NewReader(sigLines))
 	if err != nil {
 		fatal("parse cosignature lines: %v", err)
 	}

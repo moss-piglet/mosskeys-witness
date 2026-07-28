@@ -16,7 +16,7 @@ use std::process::Command;
 use tempfile::TempDir;
 
 use crate::support::{
-    HttpFixture, LOG_ORIGIN, WitnessProcess, connect, raw_request, request_body,
+    HttpFixture, TestLog, WitnessProcess, connect, raw_request, request_body,
     tree_with_numbered_leaves,
 };
 
@@ -36,10 +36,12 @@ fn interop_omniwitness_xmod_note_verifies_our_0x04_cosignature() {
     // covers §8 omniwitness row (when enabled): our served checkpoint + the
     // 0x04 line verify through golang.org/x/mod/sumdb/note with a
     // cosignature/v1 verifier — the omniwitness verification construction.
+    // The log's origin is a generic (non-sigsum) one: x/mod's verification
+    // is origin-agnostic, like omniwitness itself.
     if !interop_enabled() {
         return skip("omniwitness");
     }
-    let artifacts = produce_witnessed_checkpoint();
+    let artifacts = produce_witnessed_checkpoint(WitnessProcess::spawn());
     run_go_verifier("omniwitness", &artifacts);
 }
 
@@ -48,11 +50,16 @@ fn interop_sigsum_go_verifies_our_0x04_cosignature() {
     // covers §8 sigsum row (when enabled): sigsum-go's pkg/checkpoint parses
     // the checkpoint, verifies the log signature, and verifies our 0x04
     // cosignature via VerifyCosignatureByKey; its NewWitnessKeyId agrees
-    // with our vkey's key id (CS-08).
+    // with our vkey's key id (CS-08). The log's origin follows the sigsum
+    // convention (sigsum.org/v1/tree/<key hash>): pkg/checkpoint
+    // reconstructs the signed checkpoint text from the log public key under
+    // that origin, so a sigsum-convention log is the only log shape its
+    // log-signature verification supports — and the real deployment shape
+    // for this row (our witness cosigning for a sigsum log).
     if !interop_enabled() {
         return skip("sigsum");
     }
-    let artifacts = produce_witnessed_checkpoint();
+    let artifacts = produce_witnessed_checkpoint(WitnessProcess::spawn_with_log(TestLog::sigsum()));
     run_go_verifier("sigsum", &artifacts);
 }
 
@@ -68,8 +75,7 @@ struct Artifacts {
 }
 
 /// Submit a checkpoint to the real binary and fetch the monitoring note.
-fn produce_witnessed_checkpoint() -> Artifacts {
-    let proc = WitnessProcess::spawn();
+fn produce_witnessed_checkpoint(proc: WitnessProcess) -> Artifacts {
     let mut stream = connect(proc.port);
 
     let tree = tree_with_numbered_leaves(3);
@@ -80,7 +86,7 @@ fn produce_witnessed_checkpoint() -> Artifacts {
     let served = raw_request(
         &mut stream,
         "GET",
-        &HttpFixture::monitoring_path(LOG_ORIGIN),
+        &HttpFixture::monitoring_path(&proc.log.origin),
         &[],
     );
     assert_eq!(served.status, 200);
