@@ -21,39 +21,39 @@ the checklist ID it covers, e.g. `// covers AC-04`.
 
 | ID | Level | Requirement | Spec section | Status |
 |----|-------|-------------|--------------|--------|
-| GI-01 | MUST | `add-checkpoint` is served at `POST <submission prefix>/add-checkpoint` | HTTP Interface | ⬜ |
-| GI-02 | MUST | The request is an HTTP POST (reject other methods) | add-checkpoint | ⬜ |
-| GI-03 | SHOULD | Support HTTP keep-alive to reduce latency/load | HTTP Interface | ⬜ |
-| GI-04 | MAY | Submission and monitoring prefixes MAY share a value (we serve both from one listener) | HTTP Interface | ⬜ |
+| GI-01 | MUST | `add-checkpoint` is served at `POST <submission prefix>/add-checkpoint` | HTTP Interface | ✅ |
+| GI-02 | MUST | The request is an HTTP POST (reject other methods) | add-checkpoint | ✅ |
+| GI-03 | SHOULD | Support HTTP keep-alive to reduce latency/load | HTTP Interface | ✅ |
+| GI-04 | MAY | Submission and monitoring prefixes MAY share a value (we serve both from one listener) | HTTP Interface | ✅ |
 | GI-05 | MAY | Operators MAY front the witness with an https-bastion; out of scope for v0 code, documented only | HTTP Interface | ➖ v0 |
 
 ## 2. add-checkpoint — request parsing
 
 | ID | Level | Requirement | Spec section | Status |
 |----|-------|-------------|--------------|--------|
-| AC-01 | MUST | Body is: old-size line, zero or more consistency-proof lines, an empty line, then a checkpoint | add-checkpoint | ⬜ |
-| AC-02 | MUST | Every line terminated by U+000A | add-checkpoint | ⬜ |
-| AC-03 | MUST | Old-size line is `old` + 0x20 + decimal tree size, no leading zeroes (except `0` itself) | add-checkpoint | ⬜ |
-| AC-04 | MUST | Each proof line is one base64-encoded hash | add-checkpoint | ⬜ |
-| AC-05 | MUST NOT (client) | Reject (>63 proof lines) gracefully; we treat as 400 malformed | add-checkpoint | ⬜ |
-| AC-06 | MAY | Checkpoint may carry multiple signatures; all are parsed, unknown ones ignored | add-checkpoint | ⬜ |
+| AC-01 | MUST | Body is: old-size line, zero or more consistency-proof lines, an empty line, then a checkpoint | add-checkpoint | ✅ |
+| AC-02 | MUST | Every line terminated by U+000A | add-checkpoint | ✅ |
+| AC-03 | MUST | Old-size line is `old` + 0x20 + decimal tree size, no leading zeroes (except `0` itself) | add-checkpoint | ✅ |
+| AC-04 | MUST | Each proof line is one base64-encoded hash | add-checkpoint | ✅ |
+| AC-05 | MUST NOT (client) | Reject (>63 proof lines) gracefully; we treat as 400 malformed | add-checkpoint | ✅ |
+| AC-06 | MAY | Checkpoint may carry multiple signatures; all are parsed, unknown ones ignored | add-checkpoint | ✅ |
 
 ## 3. add-checkpoint — status taxonomy (in evaluation order)
 
 | ID | Level | Requirement | Status code | Status |
 |----|-------|-------------|-------------|--------|
-| ST-01 | MUST | Unknown checkpoint origin → 404 | `404 Not Found` | ⬜ |
-| ST-02 | MUST | No signature from a trusted key for the origin → 403 | `403 Forbidden` | ⬜ |
-| ST-03 | MUST | Signature line's key name **and** key ID match a trusted key but the signature fails to verify → 403 (note is malformed per signed-note) | `403 Forbidden` | ⬜ |
-| ST-04 | MUST | Signatures from unknown keys are ignored (never trusted, never fatal by themselves) | — | ⬜ |
-| ST-05 | MUST | `old size > checkpoint size` → 400 | `400 Bad Request` | ⬜ |
-| ST-06 | MUST | `old size` ≠ size of latest cosigned checkpoint for the origin (or ≠ 0 if none) → 409, body = decimal latest size + `\n`, `Content-Type: text/x.tlog.size` | `409 Conflict` | ⬜ |
-| ST-07 | MUST | Checkpoint size 0 with root hash ≠ RFC 6962 §2.1 empty-tree root (SHA-256 of empty string) → 422 | `422 Unprocessable Entity` | ⬜ |
-| ST-08 | MUST | `old size == 0` but consistency proof is non-empty → 422 | `422 Unprocessable Entity` | ⬜ |
-| ST-09 | MUST | Consistency proof does not verify per RFC 6962 §2.1.2 → 422 | `422 Unprocessable Entity` | ⬜ |
-| ST-10 | MUST | `old size == checkpoint size` but root hashes differ → 422 | `422 Unprocessable Entity` | ⬜ |
-| ST-11 | MAY | Origin known + signature valid but consistency check failed → request MAY be logged as misbehavior evidence; checkpoint MUST NOT be cosigned | — | ⬜ |
-| ST-12 | MUST | All checks pass → update latest-checkpoint record, respond 200 with one or more note signature lines, each starting `—` (U+2014), ending `\n` | `200 Success` | ⬜ |
+| ST-01 | MUST | Unknown checkpoint origin → 404 | `404 Not Found` | ✅ |
+| ST-02 | MUST | No signature from a trusted key for the origin → 403 | `403 Forbidden` | ✅ |
+| ST-03 | MUST | Signature line's key name **and** key ID match a trusted key but the signature fails to verify → 403 (note is malformed per signed-note) | `403 Forbidden` | ✅ |
+| ST-04 | MUST | Signatures from unknown keys are ignored (never trusted, never fatal by themselves) | — | ✅ |
+| ST-05 | MUST | `old size > checkpoint size` → 400 | `400 Bad Request` | ✅ |
+| ST-06 | MUST | `old size` ≠ size of latest cosigned checkpoint for the origin (or ≠ 0 if none) → 409, body = decimal latest size + `\n`, `Content-Type: text/x.tlog.size` | `409 Conflict` | ✅ |
+| ST-07 | MUST | Checkpoint size 0 with root hash ≠ RFC 6962 §2.1 empty-tree root (SHA-256 of empty string) → 422 | `422 Unprocessable Entity` | ✅ |
+| ST-08 | MUST | `old size == 0` but consistency proof is non-empty → 422 | `422 Unprocessable Entity` | ✅ |
+| ST-09 | MUST | Consistency proof does not verify per RFC 6962 §2.1.2 → 422 | `422 Unprocessable Entity` | ✅ |
+| ST-10 | MUST | `old size == checkpoint size` but root hashes differ → 422 | `422 Unprocessable Entity` | ✅ |
+| ST-11 | MAY | Origin known + signature valid but consistency check failed → request MAY be logged as misbehavior evidence; checkpoint MUST NOT be cosigned | — | 🟡 (logged to stderr; not yet machine-asserted) |
+| ST-12 | MUST | All checks pass → update latest-checkpoint record, respond 200 with one or more note signature lines, each starting `—` (U+2014), ending `\n` | `200 Success` | ✅ |
 
 Evaluation-order note: the spec fixes origin lookup (404) before signature
 checks (403) before size/consistency checks (400/409/422). Our handler
@@ -65,26 +65,26 @@ works before any proof verification).
 
 | ID | Level | Requirement | Spec section | Status |
 |----|-------|-------------|--------------|--------|
-| CS-01 | MUST | Response signatures are tlog-cosignatures from the witness key(s) on the checkpoint | add-checkpoint | ⬜ |
-| CS-02 | SHOULD | Witnesses SHOULD use ML-DSA-44 cosignatures | add-checkpoint | ⬜ |
-| CS-03 | MUST | For subtree-capable formats (0x06): whole-tree cosignature — `start == 0`, `end == checkpoint size` | add-checkpoint | ⬜ |
-| CS-04 | MUST NOT | Cosignature timestamp MUST NOT be zero | add-checkpoint | ⬜ |
-| CS-05 | MUST | (tlog-cosignature) timestamp is POSIX seconds, ≤ 2^63−1, big-endian in the `timestamped_signature` blob | Format | ⬜ |
-| CS-06 | MUST | (tlog-cosignature) Ed25519 signed message = `cosignature/v1\n` + `time <decimal>\n` + whole note body incl. final newline, excl. signature lines | Ed25519 signed message | ⬜ |
-| CS-07 | MUST | (tlog-cosignature) ML-DSA-44 signed message = `cosigned_message` struct: label `"subtree/v1\n\0"`, cosigner name, timestamp, log origin, start, end, root hash | ML-DSA-44 signed message | ⬜ |
-| CS-08 | MUST | Key IDs: `SHA-256(name ‖ "\n" ‖ 0x04 ‖ 32-byte pk)[:4]` (Ed25519) / `SHA-256(name ‖ "\n" ‖ 0x06 ‖ 1312-byte pk)[:4]` (ML-DSA-44) | Format | ⬜ |
-| CS-09 | MUST | vkey encodings: sig type `0x04` + 32-byte pk; sig type `0x06` + 1312-byte pk | Format | ⬜ |
-| CS-10 | SHOULD | Dual-signing policy: every accepted checkpoint gets **both** a `0x04` Ed25519 and a `0x06` ML-DSA-44 cosignature, from **separately minted** keypairs (project differentiator; stricter than the spec baseline) | — | ⬜ |
+| CS-01 | MUST | Response signatures are tlog-cosignatures from the witness key(s) on the checkpoint | add-checkpoint | ✅ |
+| CS-02 | SHOULD | Witnesses SHOULD use ML-DSA-44 cosignatures | add-checkpoint | ✅ |
+| CS-03 | MUST | For subtree-capable formats (0x06): whole-tree cosignature — `start == 0`, `end == checkpoint size` | add-checkpoint | ✅ |
+| CS-04 | MUST NOT | Cosignature timestamp MUST NOT be zero | add-checkpoint | ✅ |
+| CS-05 | MUST | (tlog-cosignature) timestamp is POSIX seconds, ≤ 2^63−1, big-endian in the `timestamped_signature` blob | Format | ✅ |
+| CS-06 | MUST | (tlog-cosignature) Ed25519 signed message = `cosignature/v1\n` + `time <decimal>\n` + whole note body incl. final newline, excl. signature lines | Ed25519 signed message | ✅ |
+| CS-07 | MUST | (tlog-cosignature) ML-DSA-44 signed message = `cosigned_message` struct: label `"subtree/v1\n\0"`, cosigner name, timestamp, log origin, start, end, root hash | ML-DSA-44 signed message | ✅ |
+| CS-08 | MUST | Key IDs: `SHA-256(name ‖ "\n" ‖ 0x04 ‖ 32-byte pk)[:4]` (Ed25519) / `SHA-256(name ‖ "\n" ‖ 0x06 ‖ 1312-byte pk)[:4]` (ML-DSA-44) | Format | ✅ |
+| CS-09 | MUST | vkey encodings: sig type `0x04` + 32-byte pk; sig type `0x06` + 1312-byte pk | Format | ✅ |
+| CS-10 | SHOULD | Dual-signing policy: every accepted checkpoint gets **both** a `0x04` Ed25519 and a `0x06` ML-DSA-44 cosignature, from **separately minted** keypairs (project differentiator; stricter than the spec baseline) | — | ✅ |
 
 ## 5. State management & atomicity
 
 | ID | Level | Requirement | Spec section | Status |
 |----|-------|-------------|--------------|--------|
-| SM-01 | MUST | Persist the new checkpoint **before** responding | add-checkpoint | ⬜ |
-| SM-02 | MUST | Old-size check and state update are atomic per origin (no check-then-update race; see spec's A/B rollback example) | add-checkpoint | ⬜ |
-| SM-03 | MUST | Only the latest checkpoint per origin is required to be tracked (we store exactly that, plus the cosigned note for serving) | Introduction | ⬜ |
-| SM-04 | — | Never cosign two conflicting checkpoints at one size (consequence of ST-06 + ST-10 + SM-02; stated as its own invariant and property-tested) | — | ⬜ |
-| SM-05 | — | Crash safety: a crash after persist but before respond is safe — the client retries, gets 409 with the now-current size, and can rebase | — | ⬜ |
+| SM-01 | MUST | Persist the new checkpoint **before** responding | add-checkpoint | ✅ |
+| SM-02 | MUST | Old-size check and state update are atomic per origin (no check-then-update race; see spec's A/B rollback example) | add-checkpoint | ✅ |
+| SM-03 | MUST | Only the latest checkpoint per origin is required to be tracked (we store exactly that, plus the cosigned note for serving) | Introduction | ✅ |
+| SM-04 | — | Never cosign two conflicting checkpoints at one size (consequence of ST-06 + ST-10 + SM-02; stated as its own invariant and property-tested) | — | 🟡 (holds by construction; property test lands with task 7) |
+| SM-05 | — | Crash safety: a crash after persist but before respond is safe — the client retries, gets 409 with the now-current size, and can rebase | — | 🟡 (holds by construction; fault-injection test lands with task 7) |
 
 ## 6. Monitoring prefix
 
