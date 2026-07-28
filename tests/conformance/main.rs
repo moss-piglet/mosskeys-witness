@@ -18,6 +18,7 @@
 mod ac;
 mod cs;
 mod gi;
+mod i3;
 mod mp;
 mod sm;
 mod st;
