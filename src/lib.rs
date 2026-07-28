@@ -19,6 +19,7 @@
 //! invariants are in `docs/spec-conformance.md` and `docs/threat-model.md`.
 
 pub mod keygen;
+pub mod store;
 
 #[cfg(test)]
 mod tests {
