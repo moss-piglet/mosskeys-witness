@@ -18,6 +18,7 @@
 //! protocol, the atomic per-log state store, and key management. The design
 //! invariants are in `docs/spec-conformance.md` and `docs/threat-model.md`.
 
+pub mod config;
 pub mod keygen;
 pub mod store;
 

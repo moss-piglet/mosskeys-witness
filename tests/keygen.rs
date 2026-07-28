@@ -6,6 +6,8 @@
 
 use std::fs;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use metamorphic_log::note::{SignatureType, VerifierKey};
 use mosskeys_witness::keygen::{self, KeygenError, Suite};
 
@@ -97,4 +99,102 @@ fn read_seed_file_ignores_comments_and_round_trips() {
 
     let seed = keygen::read_seed_file(&key.seed_file).unwrap();
     assert_eq!(seed.len(), 32);
+}
+
+#[test]
+fn load_seed_derives_the_registered_vkey() {
+    // CS-08/CS-09: at startup the witness re-derives from the seed exactly
+    // the vkeys the operator registered (task 5, T8).
+    let dir = tempfile::tempdir().unwrap();
+    let identity = keygen::generate("witness.example/w1", dir.path()).unwrap();
+
+    for key in &identity.keys {
+        let loaded = keygen::load_seed(&key.seed_file, key.suite, "witness.example/w1").unwrap();
+        assert_eq!(loaded.suite, key.suite);
+        assert_eq!(loaded.vkey, key.vkey, "vkey must be derived from the seed");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn load_seed_refuses_group_or_world_readable_files() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let identity = keygen::generate("witness.example/w1", dir.path()).unwrap();
+    let key = &identity.keys[0];
+
+    // T2: a key file readable by anyone but the owner is a fatal startup
+    // error, not a warning.
+    fs::set_permissions(&key.seed_file, fs::Permissions::from_mode(0o640)).unwrap();
+    let err = keygen::load_seed(&key.seed_file, key.suite, "witness.example/w1").unwrap_err();
+    assert!(
+        matches!(err, KeygenError::InsecurePermissions { .. }),
+        "got {err:?}"
+    );
+
+    // Stricter-than-0600 is fine (owner-only either way).
+    fs::set_permissions(&key.seed_file, fs::Permissions::from_mode(0o400)).unwrap();
+    keygen::load_seed(&key.seed_file, key.suite, "witness.example/w1").unwrap();
+}
+
+#[test]
+fn load_seed_refuses_a_name_mismatch() {
+    // T8: config says witness.example/w2 but the seed file was minted for
+    // witness.example/w1 — cosigning would silently serve the wrong identity.
+    let dir = tempfile::tempdir().unwrap();
+    let identity = keygen::generate("witness.example/w1", dir.path()).unwrap();
+    let key = &identity.keys[0];
+
+    let err = keygen::load_seed(&key.seed_file, key.suite, "witness.example/w2").unwrap_err();
+    assert!(
+        matches!(err, KeygenError::NameMismatch { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn load_seed_refuses_a_tampered_vkey_comment() {
+    // I4: a hand-edited or corrupted seed file must fail closed.
+    let dir = tempfile::tempdir().unwrap();
+    let identity = keygen::generate("witness.example/w1", dir.path()).unwrap();
+    let key = &identity.keys[0];
+
+    let text = fs::read_to_string(&key.seed_file).unwrap();
+    // Flip the vkey comment's final character so it no longer matches the key
+    // derived from the seed.
+    let mut tampered_vkey = key.vkey.clone();
+    let last = tampered_vkey.len() - 1;
+    let flipped = if tampered_vkey.as_bytes()[last] == b'A' {
+        'B'
+    } else {
+        'A'
+    };
+    tampered_vkey.replace_range(last.., &flipped.to_string());
+    let tampered = text.replace(&key.vkey, &tampered_vkey);
+    fs::write(&key.seed_file, tampered).unwrap();
+
+    let err = keygen::load_seed(&key.seed_file, key.suite, "witness.example/w1").unwrap_err();
+    assert!(matches!(err, KeygenError::VkeyMismatch(_)), "got {err:?}");
+}
+
+#[test]
+fn load_seed_accepts_a_minimal_comment_free_file() {
+    // Operators may hand-roll seed files (just the base64 seed line); with no
+    // comments to cross-check, the derived identity is the only truth.
+    let dir = tempfile::tempdir().unwrap();
+    let identity = keygen::generate("witness.example/w1", dir.path()).unwrap();
+    let key = &identity.keys[0];
+
+    let seed = keygen::read_seed_file(&key.seed_file).unwrap();
+    let minimal = dir.path().join("minimal.seed");
+    fs::write(&minimal, format!("{}\n", B64.encode(*seed))).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&minimal, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let loaded = keygen::load_seed(&minimal, key.suite, "witness.example/w1").unwrap();
+    assert_eq!(loaded.vkey, key.vkey);
 }

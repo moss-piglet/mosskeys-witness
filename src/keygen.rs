@@ -101,6 +101,32 @@ pub enum KeygenError {
 
     #[error("failed to derive vkey for {0}: {1}")]
     Vkey(Suite, String),
+
+    #[error(
+        "seed file {} is accessible by group/others (mode {mode:04o}); key files must be \
+         owner-only — run `chmod 600 {}` (threat model T2)",
+        .path.display(),
+        .path.display()
+    )]
+    InsecurePermissions { path: PathBuf, mode: u32 },
+
+    #[error(
+        "seed file {} was minted for witness {found:?}, but the configured witness name is \
+         {want:?}; refusing to cosign with a mismatched identity (threat model T8)",
+        .path.display()
+    )]
+    NameMismatch {
+        path: PathBuf,
+        want: String,
+        found: String,
+    },
+
+    #[error(
+        "seed file {} carries a vkey comment that does not match the key derived from its \
+         seed (file corrupt or hand-edited); refusing to start (fail closed, I4)",
+        .0.display()
+    )]
+    VkeyMismatch(PathBuf),
 }
 
 /// Validate a witness key name with the same rule metamorphic-log's signer
@@ -245,29 +271,124 @@ pub fn read_seed_file(path: &Path) -> Result<Zeroizing<[u8; 32]>, KeygenError> {
         path: path.to_path_buf(),
         source: e,
     })?;
+    seed_from_text(&text, path)
+}
+
+/// Extract the seed line from seed-file text (shared by [`read_seed_file`]
+/// and [`load_seed`]).
+fn seed_from_text(text: &str, path: &Path) -> Result<Zeroizing<[u8; 32]>, KeygenError> {
+    let invalid = |reason: &str| KeygenError::Io {
+        path: path.to_path_buf(),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidData, reason.to_string()),
+    };
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let raw = B64.decode(line).map_err(|_| KeygenError::Io {
-            path: path.to_path_buf(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "seed line is not valid base64",
-            ),
-        })?;
-        let seed: [u8; 32] = raw.try_into().map_err(|_| KeygenError::Io {
-            path: path.to_path_buf(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "seed must decode to exactly 32 bytes",
-            ),
-        })?;
+        let raw = B64
+            .decode(line)
+            .map_err(|_| invalid("seed line is not valid base64"))?;
+        let seed: [u8; 32] = raw
+            .try_into()
+            .map_err(|_| invalid("seed must decode to exactly 32 bytes"))?;
         return Ok(Zeroizing::new(seed));
     }
-    Err(KeygenError::Io {
+    Err(invalid("no seed line found"))
+}
+
+/// A cosigner key loaded at startup: the secret seed (zeroized on drop) and
+/// the public vkey derived from it (printed in the startup banner so the
+/// operator can eyeball it against what was registered).
+#[derive(Debug)]
+pub struct LoadedKey {
+    pub suite: Suite,
+    pub seed: Zeroizing<[u8; 32]>,
+    pub vkey: String,
+}
+
+/// Load one cosigner seed for the running witness, enforcing the startup
+/// hard-checks from the threat model (T2/T8, invariant I4):
+///
+/// 1. the file is owner-only (`mode & 0o077 == 0` on Unix) — a group- or
+///    world-readable key file is a fatal error, not a warning;
+/// 2. the seed parses (same format as [`read_seed_file`]);
+/// 3. if the file carries `# witness name:` / `# vkey:` comments (everything
+///    [`generate`] writes does), they must match the configured witness name
+///    and the vkey derived from the seed — a mismatch means the operator
+///    pointed the config at the wrong or corrupted file, and cosigning with
+///    it would silently serve the wrong identity.
+///
+/// The public half is always derived from the seed itself; the comments are
+/// only ever a cross-check, never a source of truth.
+pub fn load_seed(path: &Path, suite: Suite, name: &str) -> Result<LoadedKey, KeygenError> {
+    validate_name(name)?;
+    check_owner_only(path)?;
+
+    let text = fs::read_to_string(path).map_err(|e| KeygenError::Io {
         path: path.to_path_buf(),
-        source: std::io::Error::new(std::io::ErrorKind::InvalidData, "no seed line found"),
-    })
+        source: e,
+    })?;
+    let seed = seed_from_text(&text, path)?;
+
+    let vkey = match suite {
+        Suite::Ed25519 => {
+            let pk = metamorphic_crypto::ed25519_public_key(&*seed)
+                .map_err(|e| KeygenError::Vkey(suite, e.to_string()))?;
+            VerifierKey::new_cosignature_ed25519(name, &pk)
+        }
+        Suite::MlDsa44 => {
+            let pk = metamorphic_crypto::ml_dsa_44_public_key(&*seed)
+                .map_err(|e| KeygenError::Vkey(suite, e.to_string()))?;
+            VerifierKey::new_cosignature_mldsa44(name, &pk)
+        }
+    }
+    .map_err(|e| KeygenError::Vkey(suite, e.to_string()))?
+    .encode();
+
+    for line in text.lines() {
+        if let Some(found) = line.strip_prefix("# witness name: ") {
+            if found != name {
+                return Err(KeygenError::NameMismatch {
+                    path: path.to_path_buf(),
+                    want: name.to_string(),
+                    found: found.to_string(),
+                });
+            }
+        } else if let Some(found) = line.strip_prefix("# vkey: ") {
+            if found != vkey {
+                return Err(KeygenError::VkeyMismatch(path.to_path_buf()));
+            }
+        }
+    }
+
+    Ok(LoadedKey { suite, seed, vkey })
+}
+
+/// Refuse group/world-accessible key files (T2). A no-op on non-Unix
+/// platforms, where the ACL model differs; the file is still read only by
+/// the service account there.
+#[cfg(unix)]
+fn check_owner_only(path: &Path) -> Result<(), KeygenError> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = fs::metadata(path)
+        .map_err(|e| KeygenError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?
+        .permissions()
+        .mode()
+        & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(KeygenError::InsecurePermissions {
+            path: path.to_path_buf(),
+            mode,
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_owner_only(_path: &Path) -> Result<(), KeygenError> {
+    Ok(())
 }

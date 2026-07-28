@@ -1,0 +1,46 @@
+# mosskeys-witness example configuration.
+#
+# Copy to /etc/mosskeys-witness/witness.toml (or anywhere) and pass to:
+#   mosskeys-witness run --config /path/to/witness.toml
+#
+# Every setting is validated at startup and any error is fatal (fail closed):
+# unknown fields, duplicate origins, unparsable vkeys, insecure key files.
+
+# Witness key name — must be the name `mosskeys-witness keygen --name` minted
+# the seed files for. Embedded in every cosignature and vkey.
+name = "witness.example/w1"
+
+# Socket the HTTP service binds. The submission prefix (POST /add-checkpoint)
+# and the monitoring prefix (GET /<origin hash>/checkpoint) share this one
+# listener (GI-04).
+listen = "0.0.0.0:8080"
+
+# Append-only state file: one JSON record per cosigned checkpoint, fsynced
+# before every 200 response. Exclusive-locked while running; a second
+# instance on the same file fails fast. Back it up — losing it never causes
+# mis-cosigning, but every log must re-sync via the 409 flow.
+state_file = "/var/lib/mosskeys-witness/state.jsonl"
+
+# The two independently minted cosigner seeds (KEEP SECRET, mode 0600 — the
+# witness refuses to start on group/world-readable key files). Mint with:
+#   mosskeys-witness keygen --name witness.example/w1 --out-dir ./keys
+[keys]
+ed25519_seed = "/etc/mosskeys-witness/keys/ed25519.seed"
+mldsa44_seed = "/etc/mosskeys-witness/keys/mldsa44.seed"
+
+# One [[log]] stanza per cosigned log. Unknown origins are 404 by
+# construction; duplicate origins are a fatal startup error.
+#
+# vkeys: the log's signed-note verifier key(s) — the public line(s) the log
+# operator publishes (Ed25519 0x01, hybrid, ...). A checkpoint must carry at
+# least one signature from one of these keys to be considered at all.
+[[log]]
+origin = "example.com/behind-the-sofa"
+vkeys = [
+    "example.com/behind-the-sofa+1a2b3c4d+ARoSSZxPlaceholderReplaceMeWithTheLogsVkey=",
+]
+
+# A second log (note: origins must be exact — no wildcards, no prefixes):
+# [[log]]
+# origin = "sigsum.org/restricted-dev/2025"
+# vkeys = ["sigsum.org/restricted-dev/2025+deadbeef+AQ..."]
