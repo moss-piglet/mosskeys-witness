@@ -91,11 +91,20 @@ Before the first tag:
 
 1. Create a `release` environment on the GitHub repo (Settings → Environments),
    optionally with required reviewers / protected branches.
-2. Configure crates.io trusted publishing for the `mosskeys-witness` crate:
-   publisher `moss-piglet/mosskeys-witness`, workflow `release.yml`,
-   environment `release` (crates.io → crate Settings → Trusted Publishing; a
-   not-yet-published crate name can be pre-registered from the crates.io
-   account Trusted Publishing page).
+2. Bootstrap crates.io. Trusted publishing can only be configured on an
+   ALREADY-published crate (per the crates.io docs: "initial publish requires
+   an API token"), so the first publish is manual:
+   1. Create a short-lived API token (crates.io → Account Settings → API
+      Tokens), `cargo publish --locked` from a clean checkout, then DELETE the
+      token immediately. (`cargo publish` strips the `path` key from the
+      `metamorphic-log` dep and publishes against the `=0.4.0` version
+      requirement, so no decouple step is needed locally.)
+   2. Configure trusted publishing on the now-existing crate: crate Settings
+      → Trusted Publishing → Add → GitHub: repository owner `moss-piglet`,
+      repository name `mosskeys-witness`, workflow filename `release.yml`,
+      environment `release`.
+   From then on the tag-driven `publish` job mints OIDC tokens; the manual
+   step is idempotent-skipped on re-runs ("already exists on crates.io").
 
 No long-lived secrets are stored anywhere: cosign is keyless (GitHub OIDC),
 and the crates.io token is minted per-run from the OIDC exchange. (The Homebrew
