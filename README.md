@@ -15,6 +15,14 @@ spec recommends and no other shipping witness produces.
 > what is implemented; install and quickstart docs land with the first
 > release.
 
+## Releases
+
+Tagged releases ship prebuilt, cosign-signed binaries (macOS + Linux, arm +
+x86) with a CycloneDX SBOM, SHA-512 checksums, and SLSA build provenance, and
+publish the crate to crates.io via OIDC trusted publishing — see
+[RELEASING.md](RELEASING.md) for the supply-chain controls and how to verify a
+download.
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
