@@ -1,0 +1,27 @@
+# Optional convenience — the plain `docker run` one-liner in README.md is the
+# canonical container install. This compose file only adds restart policy and
+# keeps the three volume mounts in one place.
+#
+# Layout expected next to this file:
+#   witness.toml   — config (see config.example.toml); in-container paths must be
+#                    listen = "0.0.0.0:8080", state_file = "/state/state.jsonl",
+#                    [keys] ed25519_seed = "/keys/ed25519.seed",
+#                           mldsa44_seed = "/keys/mldsa44.seed"
+#   keys/          — the two seed files from `mosskeys-witness keygen` (0600)
+#   state/         — writable state dir (chown 65532:65532, or see README's
+#                    --user note for running as your host uid)
+services:
+  witness:
+    image: ghcr.io/moss-piglet/mosskeys-witness:latest
+    command: ["run", "--config", "/witness.toml"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./witness.toml:/witness.toml:ro
+      - ./keys:/keys:ro
+      - ./state:/state
+    restart: unless-stopped
+    # Defense in depth on top of the FROM scratch base image.
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
