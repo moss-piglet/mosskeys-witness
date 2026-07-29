@@ -16,6 +16,15 @@ spec recommends and no other shipping witness produces.
 
 ## Install
 
+One line, macOS and Linux (x64/arm64, glibc/musl auto-detected; verifies the
+SHA-512 checksum before installing):
+
+```sh
+curl -fsSL https://mosskeys.com/install.sh | sh -s -- witness
+```
+
+Or with cargo:
+
 ```sh
 cargo install mosskeys-witness --locked
 ```
