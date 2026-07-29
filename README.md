@@ -33,8 +33,36 @@ brew install moss-piglet/mosskeys-witness/mosskeys-witness
 The fully-qualified name trusts and installs just that formula (Homebrew 6+
 requires explicit trust for third-party taps).
 
-Prebuilt, signed binaries for macOS (arm64/x64) and Linux (x64/arm64) are
-attached to every
+Or run it as a container. A multi-arch (amd64/arm64) image built `FROM
+scratch` around the static musl binary — no shell, no package manager, no CA
+bundle (the witness only serves; it never dials out) — is published to GHCR
+on every release:
+
+```sh
+docker run -v ./keys:/keys -v ./witness.toml:/witness.toml \
+  ghcr.io/moss-piglet/mosskeys-witness run --config /witness.toml
+```
+
+To actually serve, publish the listen port and give the state file a writable
+home. In the mounted `witness.toml`, use the in-container paths
+(`listen = "0.0.0.0:8080"`, `state_file = "/state/state.jsonl"`, seeds under
+`/keys/`):
+
+```sh
+docker run -p 8080:8080 \
+  -v ./witness.toml:/witness.toml:ro -v ./keys:/keys:ro -v ./state:/state \
+  ghcr.io/moss-piglet/mosskeys-witness run --config /witness.toml
+```
+
+The image runs as uid/gid `65532` (non-root). Bind-mounted `keys/` must be
+readable and `state/` writable by that uid (`chown -R 65532:65532 state`), or
+run as your host uid instead: `docker run --user "$(id -u):$(id -g)" ...`.
+See [packaging/docker-compose.yml](packaging/docker-compose.yml) for an
+optional compose setup, and [RELEASING.md](RELEASING.md) to verify the image
+signature.
+
+Prebuilt, signed binaries for macOS (arm64/x64) and Linux (x64/arm64; glibc
+and static musl) are attached to every
 [GitHub Release](https://github.com/moss-piglet/mosskeys-witness/releases),
 each with a CycloneDX SBOM, `SHA512SUMS`, a cosign signature, and SLSA build
 provenance. Verify a download before running it:
@@ -93,8 +121,9 @@ automatically; your operator identity joins the public
 ## Releases
 
 Tagged releases ship prebuilt, cosign-signed binaries (macOS + Linux, arm +
-x86) with a CycloneDX SBOM, SHA-512 checksums, and SLSA build provenance, and
-publish the crate to crates.io via OIDC trusted publishing — see
+x86, plus static musl) with a CycloneDX SBOM, SHA-512 checksums, and SLSA
+build provenance, publish the crate to crates.io via OIDC trusted publishing,
+and push a cosign-signed multi-arch container image to GHCR — see
 [RELEASING.md](RELEASING.md) for the supply-chain controls and how to verify a
 download.
 

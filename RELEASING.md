@@ -1,12 +1,15 @@
 # Releasing mosskeys-witness
 
-A single `v*` tag ships two things:
+A single `v*` tag ships three things:
 
 1. **crates.io publish**, so `cargo install mosskeys-witness` works (it installs
    the `mosskeys-witness` binary).
 2. **Prebuilt, signed binaries** attached to the GitHub Release for every
-   supported platform (macOS arm/x86, Linux arm/x86), plus a CycloneDX SBOM and
-   `SHA512SUMS`.
+   supported platform (macOS arm/x86, Linux arm/x86 glibc + static musl), plus
+   a CycloneDX SBOM and `SHA512SUMS`.
+3. **A multi-arch container image** (`linux/amd64` + `linux/arm64`) pushed to
+   `ghcr.io/moss-piglet/mosskeys-witness:<version>` and `:latest`, built `FROM
+   scratch` from the two static musl binaries and cosign-signed by digest.
 
 The pipeline follows the supply-chain house style of `metamorphic-crypto`,
 `metamorphic-log`, and `mosskeys-cli`: hand-written workflows (no cargo-dist),
@@ -65,6 +68,8 @@ honest for the rest of the tree.
 | SHA-512 checksums | release `SHA512SUMS` |
 | Keyless cosign `sign-blob --bundle` (per artifact and SBOM) | release |
 | SLSA build-provenance attestation | release (per artifact) |
+| Container image `FROM scratch` (musl static, non-root, no CA bundle) | release `image` |
+| Keyless cosign `sign` on the multi-arch image index digest | release `image` |
 | crates.io OIDC trusted publish (protected `release` env) | release `publish` |
 
 ## Verifying a download
@@ -84,6 +89,25 @@ cosign verify-blob \
 gh attestation verify mosskeys-witness-<version>-<target>.tar.gz \
   --repo moss-piglet/mosskeys-witness
 ```
+
+## Verifying the container image
+
+The image digest is signed keyless with the same GitHub Actions release
+identity as the blobs. Resolve the tag to a digest, then verify:
+
+```sh
+digest="$(docker buildx imagetools inspect ghcr.io/moss-piglet/mosskeys-witness:<version> \
+  --format '{{.Manifest.Digest}}')"
+
+cosign verify "ghcr.io/moss-piglet/mosskeys-witness@${digest}" \
+  --certificate-identity-regexp 'https://github.com/moss-piglet/mosskeys-witness/.+' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The signature is attached to the multi-arch index, so it covers both the
+amd64 and arm64 variants. The image itself is `FROM scratch`: one static musl
+binary, non-root (`USER 65532`), no shell, no CA bundle (the witness only
+serves; it never initiates outbound TLS).
 
 ## One-time setup
 
@@ -109,6 +133,22 @@ Before the first tag:
 No long-lived secrets are stored anywhere: cosign is keyless (GitHub OIDC),
 and the crates.io token is minted per-run from the OIDC exchange. (The Homebrew
 tap below has its own one-time setup.)
+
+## GHCR container image
+
+The `image` job pushes `ghcr.io/moss-piglet/mosskeys-witness` using the
+workflow's `GITHUB_TOKEN` (`packages: write`, scoped to that job) — no
+credential setup is needed for the push itself. One-time steps after the
+first tagged release publishes the package:
+
+1. **Link the package to the repo** (Package settings → Connect repository).
+   The Dockerfile's `org.opencontainers.image.source` label usually does this
+   automatically on first push; verify it shows the repo README and source
+   link.
+2. **Make the package public** (Package settings → Change visibility), so the
+   `docker run` one-liner in the README works without a PAT.
+3. Keep the package's "Actions access" default (the repo's workflows can
+   already push); no extra secrets anywhere.
 
 ## Homebrew
 

@@ -3,6 +3,10 @@ Cargo.lock.orig
 *.swp
 .DS_Store
 
+# Local staging for `docker buildx` (the release workflow stages the musl
+# binaries here before building the image; see Dockerfile).
+/dist
+
 # Never commit witness key material or state that may land here during local
 # testing (see docs/threat-model.md T2/T3).
 *.seed

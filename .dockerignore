@@ -1,0 +1,5 @@
+# Minimal build context: the Dockerfile copies exactly one file per arch.
+# (Also keeps local `target/` checkouts out of the build context.)
+**/*
+!dist/linux-amd64/mosskeys-witness
+!dist/linux-arm64/mosskeys-witness
