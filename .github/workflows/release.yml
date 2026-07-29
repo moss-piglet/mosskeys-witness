@@ -222,9 +222,82 @@ jobs:
             dist/SHA512SUMS
           fail_on_unmatched_files: true
 
-  # NOTE: the Homebrew `update-tap` job intentionally lands with the tap task
-  # (mosskeys-witness (9): homebrew tap formula + install docs), which reuses
-  # the signed tarballs this workflow produces.
+  # --- Update the Homebrew tap formula ---
+  # Runs after the GitHub Release exists (so the tarball URLs resolve) and
+  # regenerates Formula/mosskeys-witness.rb in the tap repo, pointing at the
+  # freshly published, signed release tarballs. The formula installs the
+  # PREBUILT binary (not a from-source build), reusing the exact signed
+  # artifact.
+  #
+  # SUPPLY-CHAIN NOTE: `brew install` trusts only the formula's url + sha256, so
+  # write access to the tap repo is release-critical. This job authenticates with
+  # a SHORT-LIVED GitHub App installation token (auto-expires ~1h, scoped to the
+  # single tap repo), minted at runtime from an App private key. No long-lived
+  # cross-repo PAT is stored anywhere. The App credentials live in the protected
+  # `release` environment, so only this tag-triggered job (inheriting the
+  # environment's review/branch controls) can mint a token.
+  #
+  # One-time setup (see RELEASING.md):
+  #   - Create the tap repo: moss-piglet/homebrew-mosskeys-witness (with Formula/).
+  #   - Register a GitHub App with contents:write, install it on ONLY the tap repo.
+  #   - Add the `release` environment secrets HOMEBREW_TAP_APP_ID and
+  #     HOMEBREW_TAP_APP_PRIVATE_KEY.
+  #   - Add the App as a bypass actor on the tap's `main` ruleset so this push
+  #     succeeds while human pushes still require a reviewed PR.
+  update-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Checkout mosskeys-witness (for the render script)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download release tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Render Homebrew formula
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p rendered
+          ./.github/scripts/render-homebrew-formula.sh "${version}" dist > rendered/mosskeys-witness.rb
+          cat rendered/mosskeys-witness.rb
+
+      # Mint a short-lived installation token scoped to ONLY the tap repo. The
+      # token expires ~1h after issue, so a leaked runner log cannot be replayed
+      # into a durable cross-repo write credential.
+      - name: Mint tap-repo App token
+        id: tap-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.HOMEBREW_TAP_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
+          owner: moss-piglet
+          repositories: homebrew-mosskeys-witness
+
+      - name: Checkout tap repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: moss-piglet/homebrew-mosskeys-witness
+          token: ${{ steps.tap-token.outputs.token }}
+          path: tap
+
+      - name: Commit and push updated formula
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p tap/Formula
+          cp rendered/mosskeys-witness.rb tap/Formula/mosskeys-witness.rb
+          cd tap
+          if git diff --quiet -- Formula/mosskeys-witness.rb; then
+            echo "::notice::formula already up to date for v${version}; nothing to push."
+            exit 0
+          fi
+          git -c user.name='mosskeys-release[bot]' \
+              -c user.email='mosskeys-release[bot]@users.noreply.github.com' \
+              commit -am "mosskeys-witness ${version}"
+          git push
 
   # --- Publish to crates.io (OIDC trusted publishing) ---
   publish:
