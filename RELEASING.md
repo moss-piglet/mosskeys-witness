@@ -183,9 +183,3 @@ One-time setup, before the first tag that should update the tap:
    (the full `.pem` contents).
 4. On the tap repo, create the `main` ruleset above and add the App as a bypass
    actor; enable secret scanning + push protection and Dependabot.
-
-> **Residual live-test.** Until the GitHub repo exists and `v0.1.0` is tagged,
-> the `update-tap` job is validated by actionlint and by local runs of the
-> render script only. After the one-time setup above, tag `v0.1.0` and confirm
-> the tap repo's `Formula/mosskeys-witness.rb` picks up real checksums, then
-> refresh the in-repo canonical copy from the tap.
