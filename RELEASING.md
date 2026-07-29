@@ -98,10 +98,85 @@ Before the first tag:
    account Trusted Publishing page).
 
 No long-lived secrets are stored anywhere: cosign is keyless (GitHub OIDC),
-and the crates.io token is minted per-run from the OIDC exchange.
+and the crates.io token is minted per-run from the OIDC exchange. (The Homebrew
+tap below has its own one-time setup.)
 
 ## Homebrew
 
-A Homebrew tap (`brew install mosskeys-witness`) is planned and reuses the
-signed tarballs produced here; the `update-tap` job lands with the tap task
-(see the NOTE in [`.github/workflows/release.yml`](.github/workflows/release.yml)).
+Shipped as a tap. `brew install mosskeys-witness` installs the
+`mosskeys-witness` binary from the signed GitHub Release tarball (the prebuilt
+artifact, not a from-source build), so Homebrew users get the same
+SBOM-tracked, cosign-signed, provenance-attested binary as a direct download.
+
+- tap repo: `moss-piglet/homebrew-mosskeys-witness`
+- formula: `Formula/mosskeys-witness.rb` (class `MosskeysWitness`)
+- install:
+
+  ```sh
+  # Recommended: the fully-qualified name trusts and installs just this formula
+  # (Homebrew 6+ requires explicit trust for third-party taps).
+  brew install moss-piglet/mosskeys-witness/mosskeys-witness
+
+  # Or tap first, then trust the formula before the short name resolves:
+  brew tap moss-piglet/mosskeys-witness
+  brew trust --formula moss-piglet/mosskeys-witness/mosskeys-witness
+  brew install mosskeys-witness
+  ```
+
+The formula is regenerated on every `v*` tag by the release workflow's
+`update-tap` job, which runs
+[`.github/scripts/render-homebrew-formula.sh`](.github/scripts/render-homebrew-formula.sh)
+against the freshly published tarballs (computing SHA-256, since Homebrew requires
+it while the release standardizes on SHA-512) and pushes the result to the tap
+repo. The canonical copy of the current formula also lives in-repo at
+[`packaging/homebrew/mosskeys-witness.rb`](packaging/homebrew/mosskeys-witness.rb);
+refresh it from the tap after each release (until the first tag it holds
+placeholder checksums and is the seed for the tap repo).
+
+### Tap security model
+
+`brew install` trusts only the formula's `url` + `sha256`; it does not run
+cosign, the SBOM, or the SLSA attestation. Write access to the tap is therefore
+release-critical, so the tap is hardened the same way as this repo, with one
+adjustment for automation:
+
+- `main` ruleset: block deletion and force-push, require signed commits, and
+  require a reviewed PR (1 approval). Human changes always go through review.
+- The release automation is a **GitHub App** (contents:write, installed on ONLY
+  the tap repo) added as a **bypass actor** on that ruleset, so `update-tap` can
+  push the formula bump directly while humans cannot.
+- `update-tap` mints a **short-lived** App installation token at runtime
+  (auto-expires ~1h, scoped to the single tap repo). No long-lived cross-repo PAT
+  is stored anywhere. The App credentials live in the protected `release`
+  environment, so only the tag-triggered release job can mint a token.
+- Enable secret scanning + push protection and Dependabot on the tap, and keep
+  org write access least-privilege.
+
+**App decision: a NEW GitHub App per tap, not the mosskeys-cli tap App
+reused.** An App's private key can mint an installation token for EVERY repo
+the App is installed on. Reusing the `homebrew-mosskeys-cli` App would mean the
+private key stored in this repo's `release` environment could also write to the
+CLI tap (and vice versa) — widening the blast radius of either repo's stored
+credential beyond its own tap. A dedicated App (installed on ONLY
+`homebrew-mosskeys-witness`) keeps the credential's blast radius exactly one
+tap repo, at the cost of one more App registration and key rotation.
+
+One-time setup, before the first tag that should update the tap:
+
+1. Create the tap repo `moss-piglet/homebrew-mosskeys-witness` with a `Formula/`
+   directory and seed `Formula/mosskeys-witness.rb` (copy
+   `packaging/homebrew/mosskeys-witness.rb`).
+2. Register a GitHub App (owner `moss-piglet`) with repository permission
+   **Contents: Read and write**, generate a private key, and install the App on
+   ONLY `homebrew-mosskeys-witness`.
+3. Add two secrets to the `release` environment of `moss-piglet/mosskeys-witness`:
+   `HOMEBREW_TAP_APP_ID` (the App's numeric ID) and `HOMEBREW_TAP_APP_PRIVATE_KEY`
+   (the full `.pem` contents).
+4. On the tap repo, create the `main` ruleset above and add the App as a bypass
+   actor; enable secret scanning + push protection and Dependabot.
+
+> **Residual live-test.** Until the GitHub repo exists and `v0.1.0` is tagged,
+> the `update-tap` job is validated by actionlint and by local runs of the
+> render script only. After the one-time setup above, tag `v0.1.0` and confirm
+> the tap repo's `Formula/mosskeys-witness.rb` picks up real checksums, then
+> refresh the in-repo canonical copy from the tap.
