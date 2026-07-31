@@ -7,9 +7,10 @@
 #                    listen = "0.0.0.0:8080", state_file = "/state/state.jsonl",
 #                    [keys] ed25519_seed = "/keys/ed25519.seed",
 #                           mldsa44_seed = "/keys/mldsa44.seed"
-#   keys/          — the two seed files from `mosskeys-witness keygen` (0600)
-#   state/         — writable state dir (chown 65532:65532, or see README's
-#                    --user note for running as your host uid)
+#   keys/          — the two seed files from `mosskeys-witness keygen` (0600,
+#                    readable by uid 65532: chown -R 65532:65532 keys state,
+#                    or see README's --user note for running as your host uid)
+#   state/         — writable state dir (same chown)
 services:
   witness:
     image: ghcr.io/moss-piglet/mosskeys-witness:latest

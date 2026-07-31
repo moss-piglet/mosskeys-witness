@@ -45,7 +45,10 @@ requires explicit trust for third-party taps).
 Or run it as a container. A multi-arch (amd64/arm64) image built `FROM
 scratch` around the static musl binary — no shell, no package manager, no CA
 bundle (the witness only serves; it never dials out) — is published to GHCR
-on every release:
+on every release. Run the container from the directory holding your
+`witness.toml`, `keys/`, and `state/`: the bind mounts below are relative to
+the current directory, and Docker silently creates a missing host path as an
+empty directory — the witness then fails with `Is a directory (os error 21)`.
 
 ```sh
 docker run -v ./keys:/keys -v ./witness.toml:/witness.toml \
@@ -64,8 +67,9 @@ docker run -p 8080:8080 \
 ```
 
 The image runs as uid/gid `65532` (non-root). Bind-mounted `keys/` must be
-readable and `state/` writable by that uid (`chown -R 65532:65532 state`), or
-run as your host uid instead: `docker run --user "$(id -u):$(id -g)" ...`.
+readable and `state/` writable by that uid (`chown -R 65532:65532 keys state`
+— the seeds stay `0600`; only the owner changes), or run as your host uid
+instead: `docker run --user "$(id -u):$(id -g)" ...`.
 See [packaging/docker-compose.yml](packaging/docker-compose.yml) for an
 optional compose setup, and [RELEASING.md](RELEASING.md) to verify the image
 signature.
@@ -96,9 +100,14 @@ See [RELEASING.md](RELEASING.md) for the full supply-chain controls.
 
 ## Quickstart
 
-Five minutes from zero to a running dual-signing witness.
+Five minutes from zero to a running dual-signing witness. One directory holds
+everything — `witness.toml`, `keys/`, `state/` — so create it first and stay
+in it: the container bind mounts are relative to your current directory.
 
 ```sh
+# 0. One directory for the witness's whole life:
+mkdir -p ~/mosskeys-witness && cd ~/mosskeys-witness
+
 # 1. Mint the witness identity — two INDEPENDENTLY generated keypairs:
 #    Ed25519 (0x04) for interop with today's tooling, and ML-DSA-44 (0x06),
 #    the cosignature spec's recommended post-quantum type. Fully offline.
