@@ -6,10 +6,12 @@
 # mosskeys-witness binary. Deliberate decisions, matching the posture in
 # docs/threat-model.md:
 #
-#   - No CA bundle. The witness only SERVES (inbound POST /add-checkpoint +
-#     the monitoring GET prefix); it never initiates outbound connections,
-#     so there is no TLS client and no root store to ship or maintain. TLS
-#     termination, where wanted, belongs in front (reverse proxy / ingress).
+#   - No CA bundle. The serving path only ever listens (inbound POST
+#     /add-checkpoint + the monitoring GET prefix), and the `sync`
+#     subcommand's outbound feed fetch verifies TLS against webpki roots
+#     embedded in the binary — so there is no root store to ship or maintain.
+#     TLS termination for the serving path, where wanted, belongs in front
+#     (reverse proxy / ingress).
 #   - No shell, no package manager, no libc beyond the static binary. There
 #     is nothing to exec and nothing to update in place — rebuild+redeploy.
 #   - Non-root. Numeric uid/gid because scratch has no /etc/passwd.

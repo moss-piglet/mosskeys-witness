@@ -44,11 +44,12 @@ requires explicit trust for third-party taps).
 
 Or run it as a container. A multi-arch (amd64/arm64) image built `FROM
 scratch` around the static musl binary — no shell, no package manager, no CA
-bundle (the witness only serves; it never dials out) — is published to GHCR
-on every release. Run the container from the directory holding your
-`witness.toml`, `keys/`, and `state/`: the bind mounts below are relative to
-the current directory, and Docker silently creates a missing host path as an
-empty directory — the witness then fails with `Is a directory (os error 21)`.
+bundle (the serving path never dials out, and `sync` embeds webpki roots, so
+it verifies TLS without one) — is published to GHCR on every release. Run the
+container from the directory holding your `witness.toml`, `keys/`, and
+`state/`: the bind mounts below are relative to the current directory, and
+Docker silently creates a missing host path as an empty directory — the
+witness then fails with `Is a directory (os error 21)`.
 
 ```sh
 docker run -v ./keys:/keys -v ./witness.toml:/witness.toml \
@@ -115,10 +116,11 @@ mkdir -p ~/mosskeys-witness && cd ~/mosskeys-witness
 #    public C2SP vkey lines.
 mosskeys-witness keygen --name witness.example/w1 --out-dir ./keys
 
-# 2. Configure: copy config.example.toml, set name/listen/state_file/[keys],
-#    and add one [[log]] stanza per log you cosign — the (origin, vkeys)
-#    allowlist. A mosskeys deployment publishes its relay set as a
-#    machine-readable feed of exactly the origins + checkpoint vkeys to follow:
+# 2. Configure: copy config.example.toml and set name/listen/state_file/[keys].
+#    For the (origin, vkeys) allowlist, add one [[log]] stanza per log by
+#    hand, or let `sync` manage it from the deployment's public log-discovery
+#    feed of exactly the origins + checkpoint vkeys to follow (shown here).
+#    config.example.toml documents both:
 curl -s https://mosskeys.com/api/witness/logs
 
 # 3. Run. Every startup hard-check is enforced first: owner-only seed files
@@ -127,6 +129,20 @@ curl -s https://mosskeys.com/api/witness/logs
 #    closed). Both cosigner vkeys are re-printed in the startup banner.
 mosskeys-witness run --config ./witness.toml
 ```
+
+To keep the allowlist current, cron the one-shot `sync`. It polls the feed
+ETag-conditionally (a 304 costs nothing), validates every entry with the same
+fail-closed rules as config load, and atomically rewrites
+`discovered_logs.toml` next to the state file — which `run` merges at startup,
+no config changes needed. Exit code 10 means the set changed, certbot-style:
+
+```sh
+# /etc/cron.d/mosskeys-witness — every 15 minutes, restart only on change
+*/15 * * * * mosskeys-witness sync --quiet --config /etc/mosskeys-witness/witness.toml && systemctl restart mosskeys-witness
+```
+
+Manual `[[log]]` stanzas always win over managed entries for the same origin,
+so you can pin specific logs and let the feed handle the rest.
 
 Then **register** with every log you cosign. On a mosskeys deployment, apply
 at [mosskeys.com/witness/apply](https://mosskeys.com/witness/apply) with the
