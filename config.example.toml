@@ -28,23 +28,30 @@ state_file = "/var/lib/mosskeys-witness/state.jsonl"
 ed25519_seed = "/etc/mosskeys-witness/keys/ed25519.seed"
 mldsa44_seed = "/etc/mosskeys-witness/keys/mldsa44.seed"
 
-# Optional: keep the origin allowlist current without hand-edits.
-# `mosskeys-witness sync` fetches the deployment's log-discovery feed
-# (ETag-conditional, so a tight cron costs a 304), validates every entry with
-# the same fail-closed rules as this file, and atomically writes
-# discovered_logs.toml next to the state file. `run` merges that managed file
-# at startup whenever it exists, so certbot-style cron keeps you current:
+# Optional: keep the origin allowlist current without hand-edits. With the
+# [discovery] section present, `run` polls the deployment's log-discovery
+# feed itself — the first poll runs at boot (without blocking startup), then
+# every interval_secs (default 300, shown below) — validates every entry with
+# the same fail-closed rules as this file, atomically updates
+# discovered_logs.toml next to the state file, and HOT-SWAPS the in-memory
+# allowlist: new origins are cosigned within one interval, with no restart
+# and no operator action. Poll failures (feed down, invalid response) are
+# logged and non-fatal — the last known set keeps serving. Polls are
+# ETag-conditional, so an unchanged feed costs a 304.
 #
-#   */15 * * * * mosskeys-witness sync --quiet --config /etc/mosskeys-witness/witness.toml && systemctl restart mosskeys-witness
-#
-# (exit 0 = unchanged, 10 = updated, 1 = error)
-#
-# Trust posture: the feed is the vetting boundary for managed entries — a
-# vkey change served by the feed is applied on the next sync. Pin an origin's
-# keys by keeping a manual [[log]] stanza for it; manual stanzas always win
-# over managed entries for the same origin.
+# Trust posture: the pinned (HTTPS) feed URL is the vetting boundary for
+# managed entries — a vkey change served by the feed is applied at the next
+# poll. Pin an origin's keys by keeping a manual [[log]] stanza for it;
+# manual stanzas always win over managed entries for the same origin.
 # [discovery]
 # feed_url = "https://mosskeys.com/api/witness/logs"
+# interval_secs = 300
+#
+# Prefer restart-based updates instead? Omit the section and cron the
+# one-shot subcommand (same fetch/validate/write path; exit 0 = unchanged,
+# 10 = updated, 1 = error), certbot-style:
+#
+#   */15 * * * * mosskeys-witness sync --quiet --config /etc/mosskeys-witness/witness.toml && systemctl restart mosskeys-witness
 
 # One [[log]] stanza per cosigned log. Unknown origins are 404 by
 # construction; duplicate origins are a fatal startup error. With `sync`

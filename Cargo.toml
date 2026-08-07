@@ -33,6 +33,15 @@ axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
 tower = { version = "0.5", features = ["limit"] }
 tower-http = { version = "0.6", features = ["timeout"] }
+# Hot-swappable origin allowlist for the [discovery] poller. Justification
+# for the one new dependency: std RwLock would poison permanently if any
+# lock-holder panicked (a single panicking request would 500 the witness
+# forever — the opposite of fail-operational), and avoiding that needs
+# poison-recovery discipline at every call site, forever. ArcSwap has no
+# poisoning mode at all: wait-free atomic loads on the request path, one
+# atomic whole-map replace per poll, and a poll-loop panic always leaves the
+# last good allowlist serving. Zero transitive deps; MIT OR Apache-2.0.
+arc-swap = "1"
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
 # Blocking HTTP client, used ONLY by the `sync` subcommand's discovery-feed

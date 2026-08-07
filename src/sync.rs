@@ -1,6 +1,7 @@
 //! One-shot discovery-feed sync (`mosskeys-witness sync`) — the certbot-renew
 //! pattern for keeping the origin allowlist current without hand-editing
-//! `witness.toml`.
+//! `witness.toml` — plus the shared fetch/validate/write primitive the
+//! in-process discovery poller ([`crate::discovery`]) is built on.
 //!
 //! A witness only cosigns origins it is configured to trust (T8), so learning
 //! about *new* origins is a polling problem. This module is the pull side:
@@ -12,12 +13,14 @@
 //! ([`crate::config::MANAGED_FILE_NAME`], a sibling of the state file). `run`
 //! merges that file at startup whenever present, so a cron'd
 //! `mosskeys-witness sync && systemctl restart mosskeys-witness` keeps the
-//! allowlist current on its own.
+//! allowlist current on its own; with `[discovery]` configured, `run` skips
+//! the cron entirely and hot-swaps the allowlist after each changed poll.
 //!
 //! Polling is ETag-conditional: the validator from the last `200` is cached
-//! next to the state file and sent as `If-None-Match`, so a tight cron costs
-//! a `304` until the set actually changes. Exit codes follow the certbot
-//! contract: `0` unchanged, `10` updated (restart the witness), `1` error.
+//! next to the state file and sent as `If-None-Match`, so a tight interval
+//! costs a `304` until the set actually changes. Exit codes of the one-shot
+//! subcommand follow the certbot contract: `0` unchanged, `10` updated
+//! (restart the witness), `1` error.
 //!
 //! Trust posture: the configured feed is the vetting boundary for managed
 //! entries — vkey changes on a managed origin are applied as served. Operators
@@ -26,8 +29,9 @@
 //! dropped from the managed file, but their cosignature state is NEVER
 //! deleted (see [`crate::store`]).
 //!
-//! This module is the ONLY networking client code in the crate; the `run`
-//! serving path never dials out.
+//! This module is the ONLY networking client code in the crate; the request
+//! path never dials out — the optional discovery poller is the sole other
+//! network caller, and it goes through [`sync_feed`] here too.
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -38,7 +42,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use ureq::Agent;
 
-use crate::config::{self, ConfigError, LogConfig};
+use crate::config::{self, Config, ConfigError, LogConfig};
 
 /// The default log-discovery feed (a mosskeys deployment's public relay set).
 pub const DEFAULT_FEED_URL: &str = "https://mosskeys.com/api/witness/logs";
@@ -130,29 +134,60 @@ struct ManagedLog {
     vkeys: Vec<String>,
 }
 
-/// Run one sync pass: load the config (for the state file's directory and any
-/// `[discovery] feed_url`), fetch the feed ETag-conditionally, and on change
-/// validate + atomically rewrite the managed file.
-///
-/// `feed_url_override` (the `--feed-url` flag) wins over the config's
-/// `[discovery] feed_url`, which wins over [`DEFAULT_FEED_URL`].
-pub fn sync(
-    config_path: &Path,
-    feed_url_override: Option<&str>,
-    quiet: bool,
-) -> Result<SyncOutcome, SyncError> {
-    let config = config::load(config_path)?;
-    let feed_url = feed_url_override
-        .or(config.discovery.feed_url.as_deref())
-        .unwrap_or(DEFAULT_FEED_URL);
-    let managed_path = config::managed_file_path(&config.state_file);
-    let etag_path = config.state_file.with_file_name(ETAG_FILE_NAME);
+/// Everything one sync pass needs: the feed to poll and the two on-disk
+/// locations it maintains. Resolved once from the loaded config and shared by
+/// the one-shot subcommand and the in-process discovery poller
+/// ([`crate::discovery`]), so both paths fetch/validate/write identically.
+#[derive(Debug, Clone)]
+pub struct FeedTarget {
+    /// The feed URL (flag override, else the config's `[discovery] feed_url`,
+    /// else [`DEFAULT_FEED_URL`]).
+    pub feed_url: String,
+    /// The managed allowlist file, atomically rewritten when the set changes.
+    pub managed_path: PathBuf,
+    /// The ETag cache: survives restarts so validators are never lost.
+    pub etag_path: PathBuf,
+}
 
+impl FeedTarget {
+    /// Resolve the target from a loaded config. `feed_url_override` (the
+    /// `--feed-url` flag) wins over `[discovery] feed_url`, which wins over
+    /// [`DEFAULT_FEED_URL`].
+    pub fn from_config(config: &Config, feed_url_override: Option<&str>) -> Self {
+        let feed_url = feed_url_override
+            .or(config
+                .discovery
+                .as_ref()
+                .and_then(|d| d.feed_url.as_deref()))
+            .unwrap_or(DEFAULT_FEED_URL);
+        FeedTarget {
+            feed_url: feed_url.to_string(),
+            managed_path: config::managed_file_path(&config.state_file),
+            etag_path: config.state_file.with_file_name(ETAG_FILE_NAME),
+        }
+    }
+}
+
+/// What one fetch/validate/write pass learned. `entries` is the feed's
+/// validated set whenever it answered `200` — `None` exactly when the answer
+/// was `304` (the on-disk managed file is still the current set).
+#[derive(Debug)]
+pub struct SyncReport {
+    pub outcome: SyncOutcome,
+    pub entries: Option<Vec<LogConfig>>,
+}
+
+/// Run one sync pass against `target`: fetch the feed ETag-conditionally, and
+/// on a changed `200` validate + atomically rewrite the managed file. This is
+/// THE shared primitive — the `sync` subcommand prints it, the discovery
+/// poller hot-swaps from it. Blocking (ureq); async callers must use
+/// `tokio::task::spawn_blocking`.
+pub fn sync_feed(target: &FeedTarget) -> Result<SyncReport, SyncError> {
     // Only condition the request when the managed file actually exists: a
     // cached ETag without the file it validated would turn a 304 into a
     // no-op that never restores the allowlist.
-    let cached_etag = if managed_path.exists() {
-        std::fs::read_to_string(&etag_path)
+    let cached_etag = if target.managed_path.exists() {
+        std::fs::read_to_string(&target.etag_path)
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -167,19 +202,19 @@ pub fn sync(
         .build()
         .into();
 
-    let mut request = agent.get(feed_url).header("Accept", "application/json");
+    let mut request = agent
+        .get(&target.feed_url)
+        .header("Accept", "application/json");
     if let Some(etag) = &cached_etag {
         request = request.header("If-None-Match", etag);
     }
     let mut response = request.call().map_err(Box::new)?;
 
     match response.status().as_u16() {
-        304 => {
-            if !quiet {
-                println!("mosskeys-witness sync: origin set unchanged (feed not modified)");
-            }
-            Ok(SyncOutcome::Unchanged)
-        }
+        304 => Ok(SyncReport {
+            outcome: SyncOutcome::Unchanged,
+            entries: None,
+        }),
         200 => {
             let new_etag = response
                 .headers()
@@ -196,34 +231,62 @@ pub fn sync(
 
             // The change check is the allowlist itself, not the bytes on
             // disk: a re-rendered header (e.g. a new feed URL serving the
-            // same set) must not trigger a restart. A present-but-corrupt
-            // managed file fails here, closed — same posture as config load.
-            let existing = config::load_managed_entries(&managed_path)?;
+            // same set) must not trigger a rewrite or a hot-swap. A
+            // present-but-corrupt managed file fails here, closed — same
+            // posture as config load.
+            let existing = config::load_managed_entries(&target.managed_path)?;
             let outcome = if existing.is_some_and(|e| entries_of(&e) == entries_of(&logs)) {
                 SyncOutcome::Unchanged
             } else {
-                write_atomic(&managed_path, &render_managed(&logs, feed_url))?;
+                write_atomic(
+                    &target.managed_path,
+                    &render_managed(&logs, &target.feed_url),
+                )?;
                 SyncOutcome::Updated
             };
-            save_etag(&etag_path, new_etag.as_deref());
+            save_etag(&target.etag_path, new_etag.as_deref());
 
-            if !quiet {
-                match outcome {
-                    SyncOutcome::Unchanged => println!(
-                        "mosskeys-witness sync: origin set unchanged ({} logs)",
-                        logs.len()
-                    ),
-                    SyncOutcome::Updated => println!(
-                        "mosskeys-witness sync: {} logs written to {} — restart the witness to apply",
-                        logs.len(),
-                        managed_path.display()
-                    ),
-                }
-            }
-            Ok(outcome)
+            Ok(SyncReport {
+                outcome,
+                entries: Some(logs),
+            })
         }
         status => Err(SyncError::Status(status)),
     }
+}
+
+/// Run one sync pass: load the config (for the state file's directory and any
+/// `[discovery] feed_url`), fetch the feed ETag-conditionally, and on change
+/// validate + atomically rewrite the managed file.
+///
+/// `feed_url_override` (the `--feed-url` flag) wins over the config's
+/// `[discovery] feed_url`, which wins over [`DEFAULT_FEED_URL`].
+pub fn sync(
+    config_path: &Path,
+    feed_url_override: Option<&str>,
+    quiet: bool,
+) -> Result<SyncOutcome, SyncError> {
+    let config = config::load(config_path)?;
+    let target = FeedTarget::from_config(&config, feed_url_override);
+    let report = sync_feed(&target)?;
+
+    if !quiet {
+        match (&report.outcome, &report.entries) {
+            (SyncOutcome::Unchanged, None) => {
+                println!("mosskeys-witness sync: origin set unchanged (feed not modified)")
+            }
+            (SyncOutcome::Unchanged, Some(logs)) => println!(
+                "mosskeys-witness sync: origin set unchanged ({} logs)",
+                logs.len()
+            ),
+            (SyncOutcome::Updated, _) => println!(
+                "mosskeys-witness sync: {} logs written to {} — restart the witness to apply",
+                report.entries.as_ref().map_or(0, Vec::len),
+                target.managed_path.display()
+            ),
+        }
+    }
+    Ok(report.outcome)
 }
 
 /// Parse and validate the feed body into allowlist entries, applying the same

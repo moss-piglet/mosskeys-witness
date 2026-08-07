@@ -320,9 +320,10 @@ mldsa44_seed = "{}"
 
 #[test]
 fn discovery_section_is_optional_and_validated() {
-    // No [discovery] at all: fine, sync would use the default feed URL.
+    // No [discovery] at all: None — `run` will not poll, and `sync` would
+    // use the default feed URL.
     let config = fixture_with_managed("", None);
-    assert!(config.discovery.feed_url.is_none());
+    assert!(config.discovery.is_none());
 
     // A non-http(s) feed URL is a fatal typo, not a silent ignore (T8).
     let origin = "example.com/behind-the-sofa";
@@ -330,4 +331,66 @@ fn discovery_section_is_optional_and_validated() {
         + "\n[discovery]\nfeed_url = \"ftp://example.com/feed\"\n";
     let err = load_str(&text).unwrap_err();
     assert!(matches!(err, ConfigError::FeedUrl(_)), "got {err:?}");
+}
+
+#[test]
+fn discovery_section_presence_is_the_poll_switch() {
+    // A present-but-empty [discovery] section enables polling with all
+    // defaults (the acceptance-criterion flip: the section alone is enough).
+    let origin = "example.com/behind-the-sofa";
+    let config = load_str(&(valid_config(origin, &log_vkey(origin)) + "\n[discovery]\n")).unwrap();
+    let discovery = config.discovery.expect("section present");
+    assert!(discovery.feed_url.is_none());
+    assert_eq!(
+        discovery.interval(),
+        std::time::Duration::from_secs(config::DEFAULT_INTERVAL_SECS)
+    );
+
+    // Both keys set: both survive validation.
+    let config = load_str(
+        &(valid_config(origin, &log_vkey(origin))
+            + "\n[discovery]\nfeed_url = \"https://example.com/feed\"\ninterval_secs = 60\n"),
+    )
+    .unwrap();
+    let discovery = config.discovery.expect("section present");
+    assert_eq!(
+        discovery.feed_url.as_deref(),
+        Some("https://example.com/feed")
+    );
+    assert_eq!(discovery.interval(), std::time::Duration::from_secs(60));
+}
+
+#[test]
+fn discovery_interval_zero_is_fatal() {
+    // A zero interval would hot-loop the feed; reject it at load (fail
+    // closed, I4) rather than panic in the timer at runtime.
+    let origin = "example.com/behind-the-sofa";
+    let text = valid_config(origin, &log_vkey(origin)) + "\n[discovery]\ninterval_secs = 0\n";
+    let err = load_str(&text).unwrap_err();
+    assert!(
+        matches!(err, ConfigError::DiscoveryIntervalZero),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn manual_logs_tracks_only_the_manual_stanzas() {
+    // The hot-swap path re-merges manual stanzas over each refreshed feed
+    // set, so config must expose them separately from the merged list.
+    let manual_origin = "example.com/manual";
+    let managed_origin = "example.com/managed";
+    let manual = format!(
+        "[[log]]\norigin = \"{manual_origin}\"\nvkeys = [\"{}\"]\n",
+        log_vkey(manual_origin)
+    );
+    let config = fixture_with_managed(
+        &manual,
+        Some(&managed_toml(&[(
+            managed_origin,
+            &log_vkey(managed_origin),
+        )])),
+    );
+    assert_eq!(config.logs.len(), 2, "manual + managed merged");
+    assert_eq!(config.manual_logs.len(), 1);
+    assert_eq!(config.manual_logs[0].origin, manual_origin);
 }

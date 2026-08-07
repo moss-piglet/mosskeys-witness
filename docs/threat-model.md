@@ -173,6 +173,14 @@ names, or runs two witness instances on one state file.
 - `keygen` prints the exact vkey lines to hand to log operators, with the
   witness name embedded, so copy-paste errors surface as key-id mismatches
   (403 class) rather than silent mis-cosigning.
+- With `[discovery]` configured, the operator-pinned HTTPS feed URL is the
+  **vetting boundary for managed entries**: every polled entry is validated
+  with the same fail-closed rules as the manual config before any hot-swap,
+  a failed or malformed poll is only ever *refused* (the last known-good set
+  keeps serving), and an empty feed can never empty the allowlist. A vkey
+  change served by the feed is applied as served — an operator who wants an
+  origin's keys frozen keeps a manual `[[log]]` stanza for it, which always
+  wins over the feed.
 
 ### T9. Monitoring-prefix information disclosure
 

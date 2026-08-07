@@ -6,7 +6,9 @@
 //!
 //! Deliberately thin: every protocol decision lives in [`crate::witness`];
 //! this module only renders the taxonomy onto the wire and owns the
-//! socket-level concerns:
+//! socket-level concerns, plus the one background task of `run`: the
+//! discovery poller ([`crate::discovery`]) spawned when `[discovery]` is
+//! configured.
 //!
 //! - **1 MiB body cap**, enforced by axum's extractor layer *before* a
 //!   single byte is parsed (T4; a max-size request is a few KiB).
@@ -40,6 +42,8 @@ use tower::limit::ConcurrencyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
 use crate::config::{self, ConfigError};
+use crate::discovery;
+use crate::sync::FeedTarget;
 use crate::witness::{Reject, StartupError, Witness, WitnessError};
 
 /// Hard request-body cap, enforced before parsing (T4). A checkpoint with
@@ -63,6 +67,12 @@ const MAX_CONCURRENT_REQUESTS: usize = 512;
 /// Build the service router. Separated from [`run`] so tests can drive the
 /// full stack in-process (task 7's conformance suite uses it too).
 pub fn router(witness: Witness) -> Router {
+    router_shared(Arc::new(witness))
+}
+
+/// Build the router over an already-shared witness — the shape `run` needs,
+/// so the discovery poller can hot-swap the same instance the router serves.
+pub fn router_shared(witness: Arc<Witness>) -> Router {
     Router::new()
         .route("/add-checkpoint", post(add_checkpoint))
         // MP-01: the monitoring prefix on the same listener (GI-04).
@@ -78,7 +88,7 @@ pub fn router(witness: Witness) -> Router {
             REQUEST_TIMEOUT,
         ))
         .layer(ConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS))
-        .with_state(Arc::new(witness))
+        .with_state(witness)
 }
 
 /// `POST /add-checkpoint` (GI-01): the entire submission protocol.
@@ -169,12 +179,18 @@ pub enum RunError {
 }
 
 /// Load the config, build the witness (all startup hard-checks, I4), bind
-/// the listener, and serve until SIGINT/SIGTERM.
+/// the listener, and serve until SIGINT/SIGTERM. When the config carries a
+/// `[discovery]` section, the in-process poller is spawned alongside: its
+/// first poll runs immediately but async, so boot never waits on the feed.
 pub async fn run(config_path: &Path) -> Result<(), RunError> {
     let config = config::load(config_path)?;
     let listen = config.listen;
     let state_file = config.state_file.clone();
-    let witness = Witness::from_config(&config)?;
+    let discovery_target = config
+        .discovery
+        .as_ref()
+        .map(|d| (FeedTarget::from_config(&config, None), d.interval()));
+    let witness = Arc::new(Witness::from_config(&config)?);
 
     // Startup banner: public material only (I3 — never seed bytes).
     eprintln!("mosskeys-witness {}", env!("CARGO_PKG_VERSION"));
@@ -184,6 +200,13 @@ pub async fn run(config_path: &Path) -> Result<(), RunError> {
     }
     eprintln!("  logs configured: {}", witness.log_count());
     eprintln!("  state file: {}", state_file.display());
+    if let Some((target, interval)) = &discovery_target {
+        eprintln!(
+            "  discovery: polling {} every {}s (hot-reload; failures keep the current set)",
+            target.feed_url,
+            interval.as_secs()
+        );
+    }
 
     let listener = TcpListener::bind(listen)
         .await
@@ -193,7 +216,15 @@ pub async fn run(config_path: &Path) -> Result<(), RunError> {
         })?;
     eprintln!("  listening on {listen} — POST /add-checkpoint, GET /<origin hash>/checkpoint");
 
-    serve(listener, router(witness)).await;
+    // The poller is spawned only after the bind succeeds: a witness that
+    // cannot serve has no business learning new origins.
+    let poller = discovery_target
+        .map(|(target, interval)| discovery::spawn(witness.clone(), target, interval));
+
+    serve(listener, router_shared(witness)).await;
+    if let Some(handle) = poller {
+        handle.abort();
+    }
     eprintln!("mosskeys-witness: stopped");
     Ok(())
 }

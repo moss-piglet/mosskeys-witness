@@ -127,9 +127,11 @@ pub struct RunArgs {
 /// result atomically to `discovered_logs.toml` next to the state file.
 /// `run` merges that file at startup whenever present — manual [[log]]
 /// stanzas win on duplicate origins — so a cron pair keeps the allowlist
-/// current without hand-edits. The configured feed is the vetting boundary
-/// for managed entries; pin an origin's keys with a manual stanza if you want
-/// them frozen.
+/// current without hand-edits. (With a [discovery] section in the config,
+/// `run` instead polls the feed itself on an interval and hot-reloads the
+/// allowlist in-process — no cron, no restarts.) The configured feed is the
+/// vetting boundary for managed entries; pin an origin's keys with a manual
+/// stanza if you want them frozen.
 #[derive(Debug, Args)]
 #[command(after_long_help = "EXIT CODES:\n\
     \x20   0   origin set unchanged (feed not modified, or same set on disk)\n\
