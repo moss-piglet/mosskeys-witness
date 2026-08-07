@@ -16,11 +16,11 @@ readme = "README.md"
 # resolves the sibling working tree (`../metamorphic-log`); CI and releases
 # strip the `path` key via .github/scripts/decouple-from-siblings.sh and
 # resolve the pinned version from crates.io.
-metamorphic-log = { version = "=0.4.0", path = "../metamorphic-log" }
+metamorphic-log = { version = "=0.5.0", path = "../metamorphic-log" }
 # Single source of truth for cryptographic primitives (keypair generation).
 # Pure crates.io dependency: metamorphic-log resolves the same registry
 # version, so there is exactly ONE crypto core in the graph.
-metamorphic-crypto = "=0.10.7"
+metamorphic-crypto = "=0.11.0"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 base64 = "0.22"
 thiserror = "2"
@@ -35,6 +35,11 @@ tower = { version = "0.5", features = ["limit"] }
 tower-http = { version = "0.6", features = ["timeout"] }
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
+# Blocking HTTP client, used ONLY by the `sync` subcommand's discovery-feed
+# fetch — never linked into the `run` serving path's request handling. rustls
+# with embedded webpki roots: TLS verification needs no system CA bundle, so
+# `sync` works inside the FROM-scratch container image too.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 tempfile = "3"

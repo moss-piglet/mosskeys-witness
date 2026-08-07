@@ -231,6 +231,12 @@ pub enum WitnessError {
 /// Startup failures building a [`Witness`] (fail closed, I4).
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
+    #[error(
+        "no [[log]] stanzas configured and no managed discovered_logs.toml present; \
+         a witness with an empty allowlist would 404 every submission (threat model T8)"
+    )]
+    NoLogs,
+
     #[error("{0}")]
     Key(#[from] KeygenError),
 
@@ -259,10 +265,16 @@ impl std::fmt::Debug for Witness {
 
 impl Witness {
     /// Build the running witness from a validated config, applying the
-    /// remaining startup hard-checks (T2/T8/I4): both seeds load owner-only
-    /// and match the configured name, and the state store opens
-    /// (exclusive-locked, replayed, fail-closed on corruption).
+    /// remaining startup hard-checks (T2/T8/I4): the effective allowlist is
+    /// non-empty, both seeds load owner-only and match the configured name,
+    /// and the state store opens (exclusive-locked, replayed, fail-closed on
+    /// corruption).
     pub fn from_config(config: &Config) -> Result<Self, StartupError> {
+        // T8: an empty effective allowlist would 404 every submission. Checked
+        // first, so this failure needs no key or state files on disk.
+        if config.logs.is_empty() {
+            return Err(StartupError::NoLogs);
+        }
         let ed25519 = keygen::load_seed(&config.ed25519_seed, Suite::Ed25519, &config.name)?;
         let mldsa44 = keygen::load_seed(&config.mldsa44_seed, Suite::MlDsa44, &config.name)?;
         let store = Store::open(&config.state_file)?;

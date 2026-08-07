@@ -13,6 +13,21 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Keygen(args) => run_keygen(&args, cli.json),
         Command::Run(args) => run_server(&args),
+        Command::Sync(args) => run_sync(&args),
+    }
+}
+
+/// `sync` exit-code contract: 0 unchanged, 10 updated (so cron can gate a
+/// restart on it), 1 error.
+fn run_sync(args: &cli::SyncArgs) -> ExitCode {
+    use mosskeys_witness::sync::SyncOutcome;
+    match mosskeys_witness::sync::sync(&args.config, args.feed_url.as_deref(), args.quiet) {
+        Ok(SyncOutcome::Unchanged) => ExitCode::SUCCESS,
+        Ok(SyncOutcome::Updated) => ExitCode::from(10),
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

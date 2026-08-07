@@ -11,6 +11,21 @@
 //! not parse, has unknown fields, duplicates an origin, or references an
 //! unparsable vkey is a fatal startup error, never a warning.
 //!
+//! ## The managed file
+//!
+//! Besides manual `[[log]]` stanzas, the effective allowlist includes the
+//! **managed file** [`MANAGED_FILE_NAME`] next to the state file, written
+//! atomically by `mosskeys-witness sync` from the log-discovery feed. It is
+//! loaded whenever present — no opt-in section required — so a cron'd
+//! `sync && restart` picks up new origins on its own. Precedence rules:
+//!
+//! - A manual `[[log]]` stanza always wins over a managed entry for the same
+//!   origin (the managed entry is skipped, with a warning).
+//! - Origins that vanish from the feed vanish from the managed file — but
+//!   their cosignature state is never deleted.
+//! - The managed file is validated with the *same* fail-closed rules as the
+//!   manual config; a malformed managed file is fatal.
+//!
 //! ## Format
 //!
 //! ```toml
@@ -29,6 +44,10 @@
 //! ed25519_seed = "/etc/mosskeys-witness/keys/ed25519.seed"
 //! mldsa44_seed = "/etc/mosskeys-witness/keys/mldsa44.seed"
 //!
+//! # Optional: log-discovery feed settings for `mosskeys-witness sync`.
+//! # [discovery]
+//! # feed_url = "https://mosskeys.com/api/witness/logs"
+//!
 //! # One [[log]] stanza per cosigned origin. Duplicate origins are fatal.
 //! [[log]]
 //! origin = "example.com/behind-the-sofa"
@@ -44,6 +63,16 @@ use serde::Deserialize;
 
 use crate::keygen::{self, KeygenError};
 
+/// File name of the managed allowlist that `mosskeys-witness sync` maintains
+/// as a sibling of the state file (see the module docs).
+pub const MANAGED_FILE_NAME: &str = "discovered_logs.toml";
+
+/// The managed allowlist path for a given state file: a sibling of it, so it
+/// lives on the same volume and survives the same backups.
+pub fn managed_file_path(state_file: &Path) -> PathBuf {
+    state_file.with_file_name(MANAGED_FILE_NAME)
+}
+
 /// A fully validated runtime configuration (see module docs for the format).
 #[derive(Debug)]
 pub struct Config {
@@ -57,8 +86,19 @@ pub struct Config {
     pub ed25519_seed: PathBuf,
     /// Seed file for the `0x06` ML-DSA-44 cosigner.
     pub mldsa44_seed: PathBuf,
-    /// The cosigning allowlist, in config order.
+    /// The cosigning allowlist: manual `[[log]]` stanzas plus the managed
+    /// file's entries (manual wins on duplicate origins), in config order.
     pub logs: Vec<LogConfig>,
+    /// The optional `[discovery]` section (feed settings for `sync`).
+    pub discovery: DiscoveryConfig,
+}
+
+/// The optional `[discovery]` section: log-discovery feed settings. Only
+/// `mosskeys-witness sync` consults these today.
+#[derive(Debug, Default)]
+pub struct DiscoveryConfig {
+    /// Feed URL override (default: `https://mosskeys.com/api/witness/logs`).
+    pub feed_url: Option<String>,
 }
 
 /// One cosigned log: its origin line and the log public keys the witness
@@ -83,7 +123,7 @@ pub enum ConfigError {
     Parse {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     #[error("invalid witness name: {0}")]
@@ -94,11 +134,6 @@ pub enum ConfigError {
 
     #[error("the ed25519_seed and mldsa44_seed paths are the same file ({}); the two cosigner identities must be independently minted key files (threat model T2)", .0.display())]
     SameSeedFile(PathBuf),
-
-    #[error(
-        "no [[log]] stanzas configured; a witness with an empty allowlist would 404 every submission (threat model T8)"
-    )]
-    NoLogs,
 
     #[error(
         "duplicate [[log]] origin {0:?}; each origin may appear exactly once (fail closed, I4)"
@@ -117,6 +152,27 @@ pub enum ConfigError {
         vkey: String,
         reason: String,
     },
+
+    #[error("[discovery] feed_url {0:?} is not an http(s) URL")]
+    FeedUrl(String),
+
+    #[error("cannot read managed log file {}: {source}", .path.display())]
+    ManagedIo {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "managed log file {} is not valid TOML: {source}; it is written by \
+         `mosskeys-witness sync` — repair by re-running sync or remove the file",
+        .path.display()
+    )]
+    ManagedParse {
+        path: PathBuf,
+        #[source]
+        source: Box<toml::de::Error>,
+    },
 }
 
 /// The raw TOML shape. `deny_unknown_fields` turns typos into fatal errors
@@ -130,6 +186,8 @@ struct RawConfig {
     keys: RawKeys,
     #[serde(rename = "log", default)]
     logs: Vec<RawLog>,
+    #[serde(default)]
+    discovery: RawDiscovery,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,6 +195,12 @@ struct RawConfig {
 struct RawKeys {
     ed25519_seed: PathBuf,
     mldsa44_seed: PathBuf,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDiscovery {
+    feed_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,8 +211,18 @@ struct RawLog {
     vkeys: Vec<String>,
 }
 
-/// Load and validate the config at `path`. See the module docs for every
-/// check performed; any failure is a fatal [`ConfigError`].
+/// The raw shape of the managed file: only `[[log]]` stanzas, written by
+/// `mosskeys-witness sync`. Same `deny_unknown_fields` posture as the config.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawManaged {
+    #[serde(rename = "log", default)]
+    logs: Vec<RawLog>,
+}
+
+/// Load and validate the config at `path`, merging the managed file when
+/// present. See the module docs for every check performed; any failure is a
+/// fatal [`ConfigError`].
 pub fn load(path: &Path) -> Result<Config, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|e| ConfigError::Io {
         path: path.to_path_buf(),
@@ -156,9 +230,35 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     })?;
     let raw: RawConfig = toml::from_str(&text).map_err(|e| ConfigError::Parse {
         path: path.to_path_buf(),
-        source: e,
+        source: Box::new(e),
     })?;
     validate(raw)
+}
+
+/// Validate one `(origin, vkeys)` entry into its runtime form. This is THE
+/// fail-closed rule for allowlist entries, applied identically to manual
+/// `[[log]]` stanzas, managed-file entries, and (in `crate::sync`) entries
+/// fetched from the discovery feed — no new trust in malformed input,
+/// wherever it came from.
+pub fn validate_log_entry(origin: String, vkeys: Vec<String>) -> Result<LogConfig, ConfigError> {
+    if origin.is_empty() {
+        return Err(ConfigError::EmptyOrigin);
+    }
+    if vkeys.is_empty() {
+        return Err(ConfigError::NoVkeys { origin });
+    }
+    let mut parsed = Vec::with_capacity(vkeys.len());
+    for vkey in &vkeys {
+        parsed.push(VerifierKey::parse(vkey).map_err(|e| ConfigError::BadVkey {
+            origin: origin.clone(),
+            vkey: vkey.clone(),
+            reason: e.to_string(),
+        })?);
+    }
+    Ok(LogConfig {
+        origin,
+        vkeys: parsed,
+    })
 }
 
 /// Validate a parsed config into its runtime form (split out for tests).
@@ -174,35 +274,37 @@ fn validate(raw: RawConfig) -> Result<Config, ConfigError> {
         return Err(ConfigError::SameSeedFile(raw.keys.ed25519_seed));
     }
 
-    if raw.logs.is_empty() {
-        return Err(ConfigError::NoLogs);
+    if let Some(feed_url) = &raw.discovery.feed_url {
+        if !(feed_url.starts_with("https://") || feed_url.starts_with("http://")) {
+            return Err(ConfigError::FeedUrl(feed_url.clone()));
+        }
     }
+
     let mut seen = HashSet::with_capacity(raw.logs.len());
     let mut logs = Vec::with_capacity(raw.logs.len());
     for raw_log in raw.logs {
-        if raw_log.origin.is_empty() {
-            return Err(ConfigError::EmptyOrigin);
-        }
         if !seen.insert(raw_log.origin.clone()) {
             return Err(ConfigError::DuplicateOrigin(raw_log.origin));
         }
-        if raw_log.vkeys.is_empty() {
-            return Err(ConfigError::NoVkeys {
-                origin: raw_log.origin,
-            });
+        logs.push(validate_log_entry(raw_log.origin, raw_log.vkeys)?);
+    }
+
+    // Merge the managed file (written by `mosskeys-witness sync`) when
+    // present: same validation, manual stanzas win on duplicate origins.
+    let managed_path = managed_file_path(&raw.state_file);
+    if let Some(managed) = load_managed_entries(&managed_path)? {
+        for log in managed {
+            if seen.contains(&log.origin) {
+                eprintln!(
+                    "mosskeys-witness: managed entry {:?} skipped — a manual [[log]] stanza \
+                     for this origin takes precedence",
+                    log.origin
+                );
+                continue;
+            }
+            seen.insert(log.origin.clone());
+            logs.push(log);
         }
-        let mut vkeys = Vec::with_capacity(raw_log.vkeys.len());
-        for vkey in &raw_log.vkeys {
-            vkeys.push(VerifierKey::parse(vkey).map_err(|e| ConfigError::BadVkey {
-                origin: raw_log.origin.clone(),
-                vkey: vkey.clone(),
-                reason: e.to_string(),
-            })?);
-        }
-        logs.push(LogConfig {
-            origin: raw_log.origin,
-            vkeys,
-        });
     }
 
     Ok(Config {
@@ -212,5 +314,38 @@ fn validate(raw: RawConfig) -> Result<Config, ConfigError> {
         ed25519_seed: raw.keys.ed25519_seed,
         mldsa44_seed: raw.keys.mldsa44_seed,
         logs,
+        discovery: DiscoveryConfig {
+            feed_url: raw.discovery.feed_url,
+        },
     })
+}
+
+/// Read, parse, and validate the managed file at `path`: the same
+/// fail-closed rules as manual stanzas, including duplicate-origin rejection
+/// within the file (I4). `Ok(None)` when absent — the common case before the
+/// first `sync`. Shared by config loading and `sync`'s change check.
+pub fn load_managed_entries(path: &Path) -> Result<Option<Vec<LogConfig>>, ConfigError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(ConfigError::ManagedIo {
+                path: path.to_path_buf(),
+                source: e,
+            });
+        }
+    };
+    let raw: RawManaged = toml::from_str(&text).map_err(|e| ConfigError::ManagedParse {
+        path: path.to_path_buf(),
+        source: Box::new(e),
+    })?;
+    let mut seen = HashSet::with_capacity(raw.logs.len());
+    let mut logs = Vec::with_capacity(raw.logs.len());
+    for raw_log in raw.logs {
+        if !seen.insert(raw_log.origin.clone()) {
+            return Err(ConfigError::DuplicateOrigin(raw_log.origin));
+        }
+        logs.push(validate_log_entry(raw_log.origin, raw_log.vkeys)?);
+    }
+    Ok(Some(logs))
 }

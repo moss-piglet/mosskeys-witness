@@ -22,6 +22,7 @@ pub mod config;
 pub mod keygen;
 pub mod server;
 pub mod store;
+pub mod sync;
 pub mod witness;
 
 #[cfg(test)]

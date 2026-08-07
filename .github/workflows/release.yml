@@ -131,6 +131,13 @@ jobs:
           # no separate `strip` step is needed here.
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.linker }}
+          # ring (via ureq/rustls for `sync`) compiles C for the target; cc-rs
+          # looks for aarch64-linux-musl-gcc, which Ubuntu's musl-tools does
+          # not ship. The gnu gcc cross-compiles ring's freestanding C/asm for
+          # aarch64 fine; the final link is still static musl (rustc's
+          # self-contained musl std). x86_64-musl needs no help: cc-rs falls
+          # back to musl-gcc, which musl-tools provides.
+          CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
         run: cargo build --locked --release --target ${{ matrix.target }} --bin mosskeys-witness
 
       - name: Package (tar.gz)

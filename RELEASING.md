@@ -53,7 +53,7 @@ release. Before any build or publish, CI runs
 [`.github/scripts/decouple-from-siblings.sh`](.github/scripts/decouple-from-siblings.sh),
 which strips the `path` key and deletes the source-less `metamorphic-log`
 entry from `Cargo.lock`, leaving the pinned crates.io version requirement
-(`=0.4.0`). The workflow then re-fetches (`cargo fetch`) so `--locked` stays
+(`=0.5.0`). The workflow then re-fetches (`cargo fetch`) so `--locked` stays
 honest for the rest of the tree.
 
 ## Supply-chain controls
@@ -106,8 +106,9 @@ cosign verify "ghcr.io/moss-piglet/mosskeys-witness@${digest}" \
 
 The signature is attached to the multi-arch index, so it covers both the
 amd64 and arm64 variants. The image itself is `FROM scratch`: one static musl
-binary, non-root (`USER 65532`), no shell, no CA bundle (the witness only
-serves; it never initiates outbound TLS).
+binary, non-root (`USER 65532`), no shell, no CA bundle (the serving path
+never initiates outbound TLS; `sync` verifies the discovery feed against
+webpki roots embedded in the binary).
 
 ## One-time setup
 
@@ -121,7 +122,7 @@ Before the first tag:
    1. Create a short-lived API token (crates.io → Account Settings → API
       Tokens), `cargo publish --locked` from a clean checkout, then DELETE the
       token immediately. (`cargo publish` strips the `path` key from the
-      `metamorphic-log` dep and publishes against the `=0.4.0` version
+      `metamorphic-log` dep and publishes against the `=0.5.0` version
       requirement, so no decouple step is needed locally.)
    2. Configure trusted publishing on the now-existing crate: crate Settings
       → Trusted Publishing → Add → GitHub: repository owner `moss-piglet`,

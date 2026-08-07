@@ -20,7 +20,7 @@
 #        `--locked` build honest.
 #
 # The published dep is already on crates.io at the pinned version
-# (metamorphic-log 0.4.0). After this script, run `cargo fetch` once to re-add
+# (metamorphic-log 0.5.0). After this script, run `cargo fetch` once to re-add
 # the entry, then build/publish with `--locked`.
 #
 # Idempotent: safe to run twice (the second run is a no-op).
