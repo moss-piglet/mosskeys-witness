@@ -118,9 +118,9 @@ mosskeys-witness keygen --name witness.example/w1 --out-dir ./keys
 
 # 2. Configure: copy config.example.toml and set name/listen/state_file/[keys].
 #    For the (origin, vkeys) allowlist, add one [[log]] stanza per log by
-#    hand, or let `sync` manage it from the deployment's public log-discovery
-#    feed of exactly the origins + checkpoint vkeys to follow (shown here).
-#    config.example.toml documents both:
+#    hand, or let the witness follow the deployment's public log-discovery
+#    feed of exactly the origins + checkpoint vkeys to follow (shown here) —
+#    a three-line [discovery] section keeps it current in-process:
 curl -s https://mosskeys.com/api/witness/logs
 
 # 3. Run. Every startup hard-check is enforced first: owner-only seed files
@@ -130,19 +130,34 @@ curl -s https://mosskeys.com/api/witness/logs
 mosskeys-witness run --config ./witness.toml
 ```
 
-To keep the allowlist current, cron the one-shot `sync`. It polls the feed
-ETag-conditionally (a 304 costs nothing), validates every entry with the same
-fail-closed rules as config load, and atomically rewrites
-`discovered_logs.toml` next to the state file — which `run` merges at startup,
-no config changes needed. Exit code 10 means the set changed, certbot-style:
+To keep the allowlist current, let the witness poll the feed itself — three
+lines in `witness.toml`, redeployed once:
+
+```toml
+[discovery]
+feed_url = "https://mosskeys.com/api/witness/logs"
+interval_secs = 300   # optional; this is the default
+```
+
+With `[discovery]` present, `run` polls the feed every interval
+(ETag-conditional, so an unchanged feed costs a 304), validates every entry
+with the same fail-closed rules as config load, and **hot-swaps the in-memory
+allowlist** — no restart, no cron, no operator action. Every new relayed
+origin gets cosigned within one interval. Poll failures (feed down, invalid
+response) are logged and non-fatal: the witness keeps serving the last known
+set, and the managed file on disk persists across restarts.
+
+Prefer restart-based updates? The one-shot `sync` subcommand shares the same
+fetch/validate/write path and keeps its certbot-style contract (exit 0
+unchanged / 10 updated / 1 error), so a cron pair works too:
 
 ```sh
 # /etc/cron.d/mosskeys-witness — every 15 minutes, restart only on change
 */15 * * * * mosskeys-witness sync --quiet --config /etc/mosskeys-witness/witness.toml && systemctl restart mosskeys-witness
 ```
 
-Manual `[[log]]` stanzas always win over managed entries for the same origin,
-so you can pin specific logs and let the feed handle the rest.
+Either way, manual `[[log]]` stanzas always win over managed entries for the
+same origin, so you can pin specific logs and let the feed handle the rest.
 
 Then **register** with every log you cosign. On a mosskeys deployment, apply
 at [mosskeys.com/witness/apply](https://mosskeys.com/witness/apply) with the

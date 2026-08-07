@@ -14,11 +14,12 @@
 //!   spec recommends and no other shipping witness produces.
 //!
 //! All checkpoint, note, Merkle-proof, and cosignature handling is delegated
-//! to the audited [`metamorphic-log`] crate; this crate adds the wire
+//! to the audited [`metamorphic_log`] crate; this crate adds the wire
 //! protocol, the atomic per-log state store, and key management. The design
 //! invariants are in `docs/spec-conformance.md` and `docs/threat-model.md`.
 
 pub mod config;
+pub mod discovery;
 pub mod keygen;
 pub mod server;
 pub mod store;

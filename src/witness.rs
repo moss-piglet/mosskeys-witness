@@ -7,6 +7,13 @@
 //! (cosignature production), SM-01/SM-02 (persist-before-respond and atomic
 //! check-and-update, via one [`Store::update`] call per submission).
 //!
+//! The origin allowlist (ST-01's lookup table) is hot-swappable: the
+//! discovery poller ([`crate::discovery`]) atomically replaces the whole map
+//! via [`Witness::apply_managed_entries`] when the feed serves a changed set,
+//! so new origins are cosigned without a restart. Swaps never touch
+//! cosignature state — an origin dropped from the allowlist keeps its stored
+//! checkpoints and answers 404 until it returns (T8, store decoupling).
+//!
 //! The wire flow for `POST <submission prefix>/add-checkpoint`:
 //!
 //! 1. [`parse_request`] splits the body into the `old <size>` line, ≤63
@@ -22,15 +29,17 @@
 //!    the response is only built after append+fsync (SM-01).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use arc_swap::ArcSwap;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use metamorphic_log::checkpoint::Checkpoint;
 use metamorphic_log::merkle;
 use metamorphic_log::note::{self, Signature, SignedNote, VerifierKey};
 
-use crate::config::Config;
+use crate::config::{Config, LogConfig};
 use crate::keygen::{self, KeygenError, LoadedKey, Suite};
 use crate::store::{LogState, Store, StoreError, UpdateError};
 
@@ -249,7 +258,13 @@ pub struct Witness {
     name: String,
     ed25519: LoadedKey,
     mldsa44: LoadedKey,
-    logs: HashMap<String, Vec<VerifierKey>>,
+    /// The manual `[[log]]` stanzas from boot, kept so every feed refresh can
+    /// re-apply "manual wins over managed" precedence.
+    manual_logs: HashMap<String, Vec<VerifierKey>>,
+    /// The effective allowlist (manual ∪ managed). Atomically swapped as a
+    /// whole map — a request always sees one complete, consistent set, and a
+    /// poll-loop panic can never wedge serving (no lock, no poisoning).
+    logs: ArcSwap<HashMap<String, Vec<VerifierKey>>>,
     store: Store,
 }
 
@@ -257,10 +272,25 @@ impl std::fmt::Debug for Witness {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Witness")
             .field("name", &self.name)
-            .field("logs", &self.logs.len())
+            .field("logs", &self.logs.load().len())
             .field("store", &self.store)
             .finish_non_exhaustive()
     }
+}
+
+/// The diff one allowlist hot-swap applied, for operator-facing logs. The
+/// origin lists are sorted for stable output.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct AllowlistUpdate {
+    /// Origins in the new effective allowlist (manual ∪ managed).
+    pub total: usize,
+    /// Origins that were not cosigned before and now are.
+    pub added: Vec<String>,
+    /// Origins no longer cosigned (their cosignature state is untouched —
+    /// the store is never involved in a swap).
+    pub removed: Vec<String>,
+    /// Origins still cosigned but with a changed vkey set (rotation).
+    pub rotated: Vec<String>,
 }
 
 impl Witness {
@@ -278,6 +308,11 @@ impl Witness {
         let ed25519 = keygen::load_seed(&config.ed25519_seed, Suite::Ed25519, &config.name)?;
         let mldsa44 = keygen::load_seed(&config.mldsa44_seed, Suite::MlDsa44, &config.name)?;
         let store = Store::open(&config.state_file)?;
+        let manual_logs = config
+            .manual_logs
+            .iter()
+            .map(|l| (l.origin.clone(), l.vkeys.clone()))
+            .collect();
         let logs = config
             .logs
             .iter()
@@ -287,7 +322,8 @@ impl Witness {
             name: config.name.clone(),
             ed25519,
             mldsa44,
-            logs,
+            manual_logs,
+            logs: ArcSwap::from_pointee(logs),
             store,
         })
     }
@@ -302,9 +338,54 @@ impl Witness {
         [&self.ed25519.vkey, &self.mldsa44.vkey]
     }
 
-    /// Number of logs in the allowlist (startup banner/diagnostics).
+    /// Number of logs in the effective allowlist (startup banner/diagnostics).
     pub fn log_count(&self) -> usize {
-        self.logs.len()
+        self.logs.load().len()
+    }
+
+    /// Hot-swap the managed portion of the allowlist with a freshly validated
+    /// feed set (the discovery poller's only write path): the effective set
+    /// becomes manual ∪ managed, manual stanzas winning duplicate origins —
+    /// the same precedence as config load. The whole map is replaced
+    /// atomically, so a request in flight always sees one complete set.
+    ///
+    /// The store is not involved: origins dropped from the feed keep their
+    /// cosignature state and simply 404 until (if) they return.
+    pub fn apply_managed_entries(&self, managed: Vec<LogConfig>) -> AllowlistUpdate {
+        let mut next: HashMap<String, Vec<VerifierKey>> =
+            HashMap::with_capacity(self.manual_logs.len() + managed.len());
+        for log in managed {
+            if !self.manual_logs.contains_key(&log.origin) {
+                next.insert(log.origin, log.vkeys);
+            }
+        }
+        for (origin, vkeys) in &self.manual_logs {
+            next.insert(origin.clone(), vkeys.clone());
+        }
+
+        let previous = self.logs.load_full();
+        let mut update = AllowlistUpdate {
+            total: next.len(),
+            ..AllowlistUpdate::default()
+        };
+        for (origin, vkeys) in &next {
+            match previous.get(origin) {
+                None => update.added.push(origin.clone()),
+                Some(old) if old != vkeys => update.rotated.push(origin.clone()),
+                Some(_) => {}
+            }
+        }
+        for origin in previous.keys() {
+            if !next.contains_key(origin) {
+                update.removed.push(origin.clone());
+            }
+        }
+        update.added.sort();
+        update.removed.sort();
+        update.rotated.sort();
+
+        self.logs.store(Arc::new(next));
+        update
     }
 
     /// The latest cosigned state for `origin` (monitoring prefix, tests).
@@ -331,9 +412,11 @@ impl Witness {
         let new_root = *req.checkpoint.root_hash();
 
         // ST-01: unknown origin → 404, by construction (exact allowlist
-        // lookup; there is no wildcard).
-        let trusted = self
-            .logs
+        // lookup; there is no wildcard). The load pins one complete snapshot
+        // of the allowlist for this request — wait-free, and immune to a
+        // concurrent hot-swap mid-verification.
+        let logs = self.logs.load();
+        let trusted = logs
             .get(origin)
             .ok_or(WitnessError::Rejected(Reject::UnknownOrigin))?;
 

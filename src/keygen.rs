@@ -262,7 +262,7 @@ fn write_seed_file(
         })
 }
 
-/// Parse a seed file written by [`write_seed_file`]: the first non-empty,
+/// Parse a seed file written by `write_seed_file`: the first non-empty,
 /// non-comment line base64-decodes to the 32-byte seed. Everything else —
 /// including the embedded vkey comment — is informational and ignored, so the
 /// runtime signer always derives identity from the seed itself.

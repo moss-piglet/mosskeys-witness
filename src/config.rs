@@ -17,7 +17,10 @@
 //! **managed file** [`MANAGED_FILE_NAME`] next to the state file, written
 //! atomically by `mosskeys-witness sync` from the log-discovery feed. It is
 //! loaded whenever present — no opt-in section required — so a cron'd
-//! `sync && restart` picks up new origins on its own. Precedence rules:
+//! `sync && restart` picks up new origins on its own. When the optional
+//! `[discovery]` section is present, `run` additionally polls the feed
+//! in-process on an interval and hot-swaps the allowlist with no restart at
+//! all (see [`crate::discovery`]). Precedence rules:
 //!
 //! - A manual `[[log]]` stanza always wins over a managed entry for the same
 //!   origin (the managed entry is skipped, with a warning).
@@ -44,9 +47,12 @@
 //! ed25519_seed = "/etc/mosskeys-witness/keys/ed25519.seed"
 //! mldsa44_seed = "/etc/mosskeys-witness/keys/mldsa44.seed"
 //!
-//! # Optional: log-discovery feed settings for `mosskeys-witness sync`.
+//! # Optional: keep the origin allowlist current from the log-discovery
+//! # feed. With the section present, `run` polls the feed itself and
+//! # hot-swaps the allowlist — no restarts, no cron.
 //! # [discovery]
 //! # feed_url = "https://mosskeys.com/api/witness/logs"
+//! # interval_secs = 300
 //!
 //! # One [[log]] stanza per cosigned origin. Duplicate origins are fatal.
 //! [[log]]
@@ -57,6 +63,7 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use metamorphic_log::note::VerifierKey;
 use serde::Deserialize;
@@ -66,6 +73,11 @@ use crate::keygen::{self, KeygenError};
 /// File name of the managed allowlist that `mosskeys-witness sync` maintains
 /// as a sibling of the state file (see the module docs).
 pub const MANAGED_FILE_NAME: &str = "discovered_logs.toml";
+
+/// Default discovery-feed poll interval when `[discovery]` sets no
+/// `interval_secs` (5 minutes: a new origin is cosigned within one interval,
+/// and ETag-conditional polls cost a 304 in between).
+pub const DEFAULT_INTERVAL_SECS: u64 = 300;
 
 /// The managed allowlist path for a given state file: a sibling of it, so it
 /// lives on the same volume and survives the same backups.
@@ -89,21 +101,37 @@ pub struct Config {
     /// The cosigning allowlist: manual `[[log]]` stanzas plus the managed
     /// file's entries (manual wins on duplicate origins), in config order.
     pub logs: Vec<LogConfig>,
-    /// The optional `[discovery]` section (feed settings for `sync`).
-    pub discovery: DiscoveryConfig,
+    /// The manual `[[log]]` stanzas only (the subset of `logs` that did not
+    /// come from the managed file). The discovery poller re-applies "manual
+    /// wins" precedence over every refreshed feed set when hot-swapping.
+    pub manual_logs: Vec<LogConfig>,
+    /// The `[discovery]` section when present: its presence alone switches
+    /// `run` from merge-at-startup-only to in-process polling + hot-reload
+    /// (see [`crate::discovery`]). `None` keeps the cron-`sync` workflow.
+    pub discovery: Option<DiscoveryConfig>,
 }
 
-/// The optional `[discovery]` section: log-discovery feed settings. Only
-/// `mosskeys-witness sync` consults these today.
+/// The optional `[discovery]` section: log-discovery feed settings. Consulted
+/// by `mosskeys-witness sync` (feed URL) and, when the section is present at
+/// all, by `run`'s in-process poller (feed URL + interval).
 #[derive(Debug, Default)]
 pub struct DiscoveryConfig {
     /// Feed URL override (default: `https://mosskeys.com/api/witness/logs`).
     pub feed_url: Option<String>,
+    /// Poll interval override (default: [`DEFAULT_INTERVAL_SECS`]).
+    pub interval_secs: Option<u64>,
+}
+
+impl DiscoveryConfig {
+    /// The poll interval as a duration, applying the default.
+    pub fn interval(&self) -> Duration {
+        Duration::from_secs(self.interval_secs.unwrap_or(DEFAULT_INTERVAL_SECS))
+    }
 }
 
 /// One cosigned log: its origin line and the log public keys the witness
 /// trusts checkpoints from (at least one).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LogConfig {
     pub origin: String,
     pub vkeys: Vec<VerifierKey>,
@@ -156,6 +184,12 @@ pub enum ConfigError {
     #[error("[discovery] feed_url {0:?} is not an http(s) URL")]
     FeedUrl(String),
 
+    #[error(
+        "[discovery] interval_secs must be at least 1 (got 0); a zero interval would \
+         hammer the feed in a hot loop"
+    )]
+    DiscoveryIntervalZero,
+
     #[error("cannot read managed log file {}: {source}", .path.display())]
     ManagedIo {
         path: PathBuf,
@@ -186,8 +220,10 @@ struct RawConfig {
     keys: RawKeys,
     #[serde(rename = "log", default)]
     logs: Vec<RawLog>,
-    #[serde(default)]
-    discovery: RawDiscovery,
+    /// `Option`, not `#[serde(default)]`: the section's *presence* is the
+    /// switch that turns on `run`'s in-process poller, so an absent section
+    /// (`None`) and a present-but-empty one (`Some(default)`) must differ.
+    discovery: Option<RawDiscovery>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,6 +237,7 @@ struct RawKeys {
 #[serde(deny_unknown_fields)]
 struct RawDiscovery {
     feed_url: Option<String>,
+    interval_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -274,23 +311,29 @@ fn validate(raw: RawConfig) -> Result<Config, ConfigError> {
         return Err(ConfigError::SameSeedFile(raw.keys.ed25519_seed));
     }
 
-    if let Some(feed_url) = &raw.discovery.feed_url {
-        if !(feed_url.starts_with("https://") || feed_url.starts_with("http://")) {
-            return Err(ConfigError::FeedUrl(feed_url.clone()));
+    if let Some(discovery) = &raw.discovery {
+        if let Some(feed_url) = &discovery.feed_url {
+            if !(feed_url.starts_with("https://") || feed_url.starts_with("http://")) {
+                return Err(ConfigError::FeedUrl(feed_url.clone()));
+            }
+        }
+        if discovery.interval_secs == Some(0) {
+            return Err(ConfigError::DiscoveryIntervalZero);
         }
     }
 
     let mut seen = HashSet::with_capacity(raw.logs.len());
-    let mut logs = Vec::with_capacity(raw.logs.len());
+    let mut manual_logs = Vec::with_capacity(raw.logs.len());
     for raw_log in raw.logs {
         if !seen.insert(raw_log.origin.clone()) {
             return Err(ConfigError::DuplicateOrigin(raw_log.origin));
         }
-        logs.push(validate_log_entry(raw_log.origin, raw_log.vkeys)?);
+        manual_logs.push(validate_log_entry(raw_log.origin, raw_log.vkeys)?);
     }
 
     // Merge the managed file (written by `mosskeys-witness sync`) when
     // present: same validation, manual stanzas win on duplicate origins.
+    let mut logs = manual_logs.clone();
     let managed_path = managed_file_path(&raw.state_file);
     if let Some(managed) = load_managed_entries(&managed_path)? {
         for log in managed {
@@ -314,9 +357,11 @@ fn validate(raw: RawConfig) -> Result<Config, ConfigError> {
         ed25519_seed: raw.keys.ed25519_seed,
         mldsa44_seed: raw.keys.mldsa44_seed,
         logs,
-        discovery: DiscoveryConfig {
-            feed_url: raw.discovery.feed_url,
-        },
+        manual_logs,
+        discovery: raw.discovery.map(|d| DiscoveryConfig {
+            feed_url: d.feed_url,
+            interval_secs: d.interval_secs,
+        }),
     })
 }
 
