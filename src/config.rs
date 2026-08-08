@@ -17,7 +17,7 @@
 //! **managed file** [`MANAGED_FILE_NAME`] next to the state file, written
 //! atomically by `mosskeys-witness sync` from the log-discovery feed. It is
 //! loaded whenever present — no opt-in section required — so a cron'd
-//! `sync && restart` picks up new origins on its own. When the optional
+//! `sync` (exit 10 = restart) picks up new origins on its own. When the optional
 //! `[discovery]` section is present, `run` additionally polls the feed
 //! in-process on an interval and hot-swaps the allowlist with no restart at
 //! all (see [`crate::discovery`]). Precedence rules:

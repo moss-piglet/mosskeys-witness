@@ -435,7 +435,7 @@ fn run_sync_bin(config: &Path, extra_args: &[&str]) -> (Option<i32>, String, Str
 fn exit_code_contract() {
     let fixture = Fixture::new("");
 
-    // 10: the managed file changed (certbot pattern: `sync && restart`).
+    // 10: the managed file changed (certbot pattern: gate the restart on 10).
     let server = serve_once("200 OK", Some("\"v1\""), &two_log_feed());
     let (code, _, _) = run_sync_bin(
         &fixture.config_path,

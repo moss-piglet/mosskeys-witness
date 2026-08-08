@@ -1,0 +1,18 @@
+# Fires mosskeys-witness-sync.service on a schedule. The discovery feed is
+# ETag-conditional, so a quiet poll costs a 304 and a few bytes; every fifteen
+# minutes keeps new relayed origins cosigned promptly without hammering
+# anyone.
+#
+# Install both units, then:
+#   systemctl daemon-reload
+#   systemctl enable --now mosskeys-witness-sync.timer
+
+[Unit]
+Description=Keep the mosskeys-witness origin allowlist current
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target

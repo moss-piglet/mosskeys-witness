@@ -149,12 +149,16 @@ set, and the managed file on disk persists across restarts.
 
 Prefer restart-based updates? The one-shot `sync` subcommand shares the same
 fetch/validate/write path and keeps its certbot-style contract (exit 0
-unchanged / 10 updated / 1 error), so a cron pair works too:
+unchanged / 10 updated / 1 error), so cron can gate the restart on the 10:
 
 ```sh
 # /etc/cron.d/mosskeys-witness — every 15 minutes, restart only on change
-*/15 * * * * mosskeys-witness sync --quiet --config /etc/mosskeys-witness/witness.toml && systemctl restart mosskeys-witness
+*/15 * * * * root mosskeys-witness sync --quiet --config /etc/mosskeys-witness/witness.toml; [ $? -eq 10 ] && systemctl restart mosskeys-witness
 ```
+
+Prefer systemd timers to cron? A oneshot service and timer pair ship in
+[packaging/systemd](packaging/systemd): the service runs `sync` and restarts
+the witness only on exit 10, and the timer fires it every fifteen minutes.
 
 Either way, manual `[[log]]` stanzas always win over managed entries for the
 same origin, so you can pin specific logs and let the feed handle the rest.

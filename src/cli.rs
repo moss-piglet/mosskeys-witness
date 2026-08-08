@@ -142,9 +142,8 @@ pub struct RunArgs {
     \x20   # One-shot: fetch the feed and write the managed allowlist\n\
     \x20   mosskeys-witness sync --config ./witness.toml\n\
     \n\
-    \x20   # Cron, certbot-style: restart only when the set changed\n\
-    \x20   */15 * * * * mosskeys-witness sync --quiet --config /etc/mosskeys-witness/witness.toml \\\n\
-    \x20       && systemctl restart mosskeys-witness\n\
+    \x20   # Cron, certbot-style: restart only when the set changed (exit 10)\n\
+    \x20   */15 * * * * root mosskeys-witness sync --quiet --config /etc/mosskeys-witness/witness.toml; [ $? -eq 10 ] && systemctl restart mosskeys-witness\n\
     \n\
     \x20   # Point at a different deployment's feed (or set [discovery] feed_url)\n\
     \x20   mosskeys-witness sync --config ./witness.toml --feed-url https://example.com/api/witness/logs")]
