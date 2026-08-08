@@ -12,7 +12,7 @@
 //! result atomically to the managed file
 //! ([`crate::config::MANAGED_FILE_NAME`], a sibling of the state file). `run`
 //! merges that file at startup whenever present, so a cron'd
-//! `mosskeys-witness sync && systemctl restart mosskeys-witness` keeps the
+//! `mosskeys-witness sync` with the restart gated on exit 10 keeps the
 //! allowlist current on its own; with `[discovery]` configured, `run` skips
 //! the cron entirely and hot-swaps the allowlist after each changed poll.
 //!

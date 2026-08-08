@@ -1,0 +1,27 @@
+# Restart-based allowlist updates for mosskeys-witness, certbot-style.
+#
+# The one-shot `sync` subcommand fetches the log-discovery feed, validates it
+# with the same fail-closed rules as config load, and atomically rewrites
+# discovered_logs.toml next to the state file. Its exit code says what
+# happened: 0 unchanged, 10 updated, 1 error. This unit restarts the witness
+# only on 10, so it reloads the managed allowlist; a real error still fails
+# the unit for your alerting.
+#
+# Pair with mosskeys-witness-sync.timer. Assumes the witness runs as
+# mosskeys-witness.service with its config at /etc/mosskeys-witness/ and the
+# binary at /usr/local/bin (the install.sh default); adjust to taste.
+#
+# Prefer zero restarts? Skip these units and add a [discovery] section to
+# witness.toml instead: the witness then polls the feed itself and hot-swaps
+# the allowlist in-process (0.4.0+).
+
+[Unit]
+Description=Refresh the mosskeys-witness origin allowlist from the discovery feed
+Documentation=https://github.com/moss-piglet/mosskeys-witness
+# Polling needs the network; a failed run never touches the live witness.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/usr/local/bin/mosskeys-witness sync --quiet --config /etc/mosskeys-witness/witness.toml; rc=$$?; if [ $$rc -eq 10 ]; then systemctl restart mosskeys-witness.service; elif [ $$rc -ne 0 ]; then exit $$rc; fi'
