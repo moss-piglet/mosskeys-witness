@@ -167,7 +167,11 @@ Then **register** with every log you cosign. On a mosskeys deployment, apply
 at [mosskeys.com/witness/apply](https://mosskeys.com/witness/apply) with the
 cosigner name, your submission prefix URL, and BOTH printed vkeys — the
 registry accepts the `0x06` ML-DSA-44 vkey alongside the classical `0x04` one.
-After review and activation, checkpoints start arriving at your endpoint
+The submission prefix URL is `https://` + the witness name (e.g. a witness
+named `witness.example/w1` registers `https://witness.example/w1`): the API is
+served under the name's path component AND at the listener root, so the
+registered prefix reaches `add-checkpoint` whether or not it carries the
+path. After review and activation, checkpoints start arriving at your endpoint
 automatically; your operator identity joins the public
 [witness directory](https://mosskeys.com/witnesses).
 

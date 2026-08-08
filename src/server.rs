@@ -4,6 +4,14 @@
 //! GI-04 permits — with the threat model's T4 hardening applied
 //! (GI-01…GI-03).
 //!
+//! The full API is mounted TWICE on that listener: at the root, and —
+//! when the configured witness `name` carries a path component — under
+//! that path (C2SP tlog-witness: a witness's API prefix is its name's
+//! path, so a witness named `witness.example/mosskeys` answers under
+//! `/mosskeys`). The root mount is back-compat for root-registered
+//! prefixes already in the wild and is the only mount for host-only
+//! names. Both mounts are the same handlers over the same state.
+//!
 //! Deliberately thin: every protocol decision lives in [`crate::witness`];
 //! this module only renders the taxonomy onto the wire and owns the
 //! socket-level concerns, plus the one background task of `run`: the
@@ -73,15 +81,22 @@ pub fn router(witness: Witness) -> Router {
 /// Build the router over an already-shared witness — the shape `run` needs,
 /// so the discovery poller can hot-swap the same instance the router serves.
 pub fn router_shared(witness: Arc<Witness>) -> Router {
-    Router::new()
-        .route("/add-checkpoint", post(add_checkpoint))
-        // MP-01: the monitoring prefix on the same listener (GI-04).
-        // Registered alongside the POST route, BEFORE the layers below —
-        // axum layers only wrap routes registered before them, and the T4
-        // timeout/concurrency bounds must cover this route too.
-        .route("/{origin_hash}/checkpoint", get(latest_checkpoint))
+    // C2SP tlog-witness: the API prefix is the witness name's path
+    // component (`Witness::prefix`). Mount the full API under it, and at
+    // the listener root too — back-compat for root-registered prefixes
+    // already in the wild, and the only mount for host-only names. Same
+    // handlers, same state; the layers below wrap both mounts.
+    let mut app = mount_api(Router::new(), "");
+    let prefix = witness.prefix();
+    if !prefix.is_empty() {
+        app = mount_api(app, prefix);
+    }
+    app
         // Layers apply outward-in: the concurrency bound is the cheap outer
         // gate, then the request timeout, then the body cap at extraction.
+        // Routes are all registered BEFORE the layers — axum layers only
+        // wrap routes registered before them, and the T4 timeout/concurrency
+        // bounds must cover every mount.
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
@@ -89,6 +104,22 @@ pub fn router_shared(witness: Arc<Witness>) -> Router {
         ))
         .layer(ConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS))
         .with_state(witness)
+}
+
+/// The whole protocol surface under one base path: the submission endpoint
+/// (`POST <base>/add-checkpoint`, GI-01) and the monitoring endpoint
+/// (`GET <base>/<origin hash>/checkpoint`, MP-01, on the same listener —
+/// GI-04). `base` is `""` for the root mount or the name-derived prefix
+/// (e.g. `"/mosskeys"`); [`crate::config::prefix_from_name`] guarantees the
+/// prefix is a plain static path, so it can never smuggle router syntax
+/// into these patterns.
+fn mount_api(router: Router<Arc<Witness>>, base: &str) -> Router<Arc<Witness>> {
+    router
+        .route(&format!("{base}/add-checkpoint"), post(add_checkpoint))
+        .route(
+            &format!("{base}/{{origin_hash}}/checkpoint"),
+            get(latest_checkpoint),
+        )
 }
 
 /// `POST /add-checkpoint` (GI-01): the entire submission protocol.
@@ -215,6 +246,12 @@ pub async fn run(config_path: &Path) -> Result<(), RunError> {
             source: e,
         })?;
     eprintln!("  listening on {listen} — POST /add-checkpoint, GET /<origin hash>/checkpoint");
+    let prefix = witness.prefix();
+    if !prefix.is_empty() {
+        eprintln!(
+            "  name prefix {prefix} — also serving POST {prefix}/add-checkpoint, GET {prefix}/<origin hash>/checkpoint"
+        );
+    }
 
     // The poller is spawned only after the bind succeeds: a witness that
     // cannot serve has no business learning new origins.

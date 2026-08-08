@@ -7,7 +7,13 @@
 # unknown fields, duplicate origins, unparsable vkeys, insecure key files.
 
 # Witness key name — must be the name `mosskeys-witness keygen --name` minted
-# the seed files for. Embedded in every cosignature and vkey.
+# the seed files for. Embedded in every cosignature and vkey. The name's path
+# component ("/w1" below) is also the HTTP API prefix: the witness serves
+# POST <prefix>/add-checkpoint and GET <prefix>/<origin hash>/checkpoint under
+# it AND at the listener root, so a registered submission prefix of
+# "https://<name>" reaches the API either way. A host-only name serves at the
+# root only. The path must be a plain static URL path (no empty segments, no
+# `{`/`}`/`*` router syntax) — anything else is a fatal startup error.
 name = "witness.example/w1"
 
 # Socket the HTTP service binds. The submission prefix (POST /add-checkpoint)
