@@ -27,6 +27,18 @@ the checklist ID it covers, e.g. `// covers AC-04`.
 | GI-04 | MAY | Submission and monitoring prefixes MAY share a value (we serve both from one listener) | HTTP Interface | ✅ |
 | GI-05 | MAY | Operators MAY front the witness with an https-bastion; out of scope for v0 code, documented only | HTTP Interface | ➖ v0 |
 
+Prefix note: the spec defines a witness by its name plus submission and
+monitoring URL prefixes, and the ecosystem registration convention derives
+those prefixes from the witness name itself (`https://` + name, e.g.
+`https://witness.example/w1`). mosskeys-witness therefore serves the full
+API **under the configured name's path component** (`/w1` here) AND **at
+the listener root**, so name-derived and root-registered prefixes reach the
+same handlers with the same taxonomy (see `config::prefix_from_name`;
+conformance tests in `tests/conformance/gi.rs`). A host-only name serves at
+the root only. A name whose path component is not a plain static URL path
+(empty segments, or the router's `{`/`}`/`*` syntax characters) is a fatal
+config error (fail closed, I4).
+
 ## 2. add-checkpoint — request parsing
 
 | ID | Level | Requirement | Spec section | Status |

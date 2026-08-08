@@ -5,8 +5,8 @@ use axum::http::StatusCode;
 use tower::ServiceExt as _;
 
 use crate::support::{
-    self, HttpFixture, WitnessProcess, connect, origin_hash, post, raw_request, request_body,
-    submit, tree_with_numbered_leaves,
+    self, HttpFixture, TestLog, WitnessProcess, body_string, connect, get, origin_hash, post,
+    raw_request, request_body, submit, tree_with_numbered_leaves,
 };
 
 #[tokio::test]
@@ -90,6 +90,147 @@ fn one_keep_alive_connection_serves_sequential_requests_on_both_prefixes() {
     assert!(String::from_utf8(third.body).unwrap().contains("\u{2014} "));
 
     let _ = proc.into_stderr();
+}
+
+#[tokio::test]
+async fn the_api_is_served_under_the_names_path_prefix_too() {
+    // covers GI-01's prefix: the API prefix is the witness name's path
+    // component (the fixture's "witness.example/test" → "/test"), so the
+    // full API answers under it with the SAME handlers and taxonomy as the
+    // listener root — which keeps serving for back-compat with
+    // root-registered prefixes and host-only names.
+    let fx = HttpFixture::new();
+
+    // The handler is reached under the prefix: a malformed body gets the
+    // handler's own 400, not the router's bare 404.
+    for base in ["", "/test"] {
+        let response = fx
+            .app
+            .clone()
+            .oneshot(post(&format!("{base}/add-checkpoint"), ""))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "base {base:?}");
+        assert_eq!(
+            body_string(response).await,
+            "body is not newline-terminated\n"
+        );
+    }
+
+    // The taxonomy is identical under both mounts: ST-01's unknown origin
+    // is 404 with the same body.
+    let tree = tree_with_numbered_leaves(3);
+    let stranger = TestLog::new("stranger.example/not-registered");
+    let unknown = request_body(0, &[], &stranger.checkpoint_note(&tree, 3));
+    for base in ["", "/test"] {
+        let response = fx
+            .app
+            .clone()
+            .oneshot(post(&format!("{base}/add-checkpoint"), unknown.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "base {base:?}");
+        assert_eq!(body_string(response).await, "unknown checkpoint origin\n");
+    }
+
+    // End to end under the prefix: cosign, then read the stored note back
+    // from the prefix's monitoring path (MP-01 under the same prefix).
+    let note = fx.log.checkpoint_note(&tree, 3);
+    let response = fx
+        .app
+        .clone()
+        .oneshot(post("/test/add-checkpoint", request_body(0, &[], &note)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_string(response).await.lines().count(), 2);
+
+    let monitoring = format!("/test{}", HttpFixture::monitoring_path(support::LOG_ORIGIN));
+    let response = fx.app.clone().oneshot(get(&monitoring)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_string(response).await,
+        fx.stored_note(support::LOG_ORIGIN).unwrap()
+    );
+
+    // Near-miss paths under the prefix are NOT the endpoint (and the v0
+    // out-of-scope sign-subtree stays unimplemented there too, §7).
+    for path in [
+        "/test",
+        "/test/",
+        "/test/add-checkpoint/",
+        "/test/sign-subtree",
+    ] {
+        let response = fx.app.clone().oneshot(post(path, "old 0\n")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "path {path}");
+    }
+
+    // `/test/checkpoint` is not a prefix near-miss at all: it matches the
+    // ROOT mount's `/{origin_hash}/checkpoint` with origin_hash = "test",
+    // so a GET is the by-construction MP-02 miss (404) and a POST is the
+    // monitoring path's 405 — exactly as for any two-segment path.
+    let response = fx
+        .app
+        .clone()
+        .oneshot(get("/test/checkpoint"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn method_strictness_holds_under_the_names_path_prefix_too() {
+    // covers GI-02 under the name-derived prefix: POST-only for
+    // add-checkpoint, GET-only for the monitoring path — the same 405
+    // matrix as the root mount.
+    let fx = HttpFixture::new();
+    for method in ["GET", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"] {
+        let response = fx
+            .app
+            .clone()
+            .oneshot(support::method(method, "/test/add-checkpoint"))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method} must not reach the handler"
+        );
+    }
+
+    let monitoring = format!("/test{}", HttpFixture::monitoring_path(support::LOG_ORIGIN));
+    for method in ["POST", "PUT", "DELETE", "PATCH", "OPTIONS"] {
+        let response = fx
+            .app
+            .clone()
+            .oneshot(support::method(method, &monitoring))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method} must not reach the handler"
+        );
+    }
+}
+
+#[test]
+fn the_startup_banner_prints_the_effective_prefixes() {
+    // The ops-facing evidence of the dual mount: with a path-bearing name
+    // (the fixture's "witness.example/test"), the banner lists the root API
+    // AND the name-derived prefix API.
+    let proc = WitnessProcess::spawn();
+    let stderr = proc.into_stderr();
+    assert!(
+        stderr.contains("POST /add-checkpoint, GET /<origin hash>/checkpoint"),
+        "stderr was:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "name prefix /test — also serving POST /test/add-checkpoint, GET /test/<origin hash>/checkpoint"
+        ),
+        "stderr was:\n{stderr}"
+    );
 }
 
 #[tokio::test]

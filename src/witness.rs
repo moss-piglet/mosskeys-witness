@@ -256,6 +256,11 @@ pub enum StartupError {
 /// The witness: identity, trusted-log allowlist, and the atomic state store.
 pub struct Witness {
     name: String,
+    /// The name-derived HTTP API prefix (C2SP tlog-witness: the name's path
+    /// component), e.g. `"/mosskeys"`; empty for host-only names. The HTTP
+    /// surface ([`crate::server`]) serves the full API under this prefix and
+    /// at the listener root.
+    prefix: String,
     ed25519: LoadedKey,
     mldsa44: LoadedKey,
     /// The manual `[[log]]` stanzas from boot, kept so every feed refresh can
@@ -320,6 +325,7 @@ impl Witness {
             .collect();
         Ok(Witness {
             name: config.name.clone(),
+            prefix: config.prefix.clone(),
             ed25519,
             mldsa44,
             manual_logs,
@@ -331,6 +337,12 @@ impl Witness {
     /// The witness key name (embedded in every cosignature).
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The name-derived HTTP API prefix (the name's path component, per
+    /// C2SP tlog-witness), e.g. `"/mosskeys"`; `""` for host-only names.
+    pub fn prefix(&self) -> &str {
+        &self.prefix
     }
 
     /// The derived public vkeys of both cosigners, for the startup banner.

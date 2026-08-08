@@ -33,6 +33,8 @@
 //!
 //! ```toml
 //! # Witness identity (must match the name the seed files were minted for).
+//! # The name's path component ("/w1" here) is also the HTTP API prefix:
+//! # the witness serves under it AND at the listener root (C2SP + back-compat).
 //! name = "witness.example/w1"
 //!
 //! # Socket the HTTP service binds (submission + monitoring prefixes share
@@ -85,11 +87,37 @@ pub fn managed_file_path(state_file: &Path) -> PathBuf {
     state_file.with_file_name(MANAGED_FILE_NAME)
 }
 
+/// Derive the HTTP API prefix from the witness `name` (C2SP tlog-witness:
+/// the API is served under the name's path component). `"host"` and
+/// `"host/"` serve at the listener root (`""`); `"host/mosskeys"` serves
+/// under `"/mosskeys"`. Anything that is not a plain static URL path —
+/// empty segments (`//`), or the HTTP router's syntax characters `{`, `}`,
+/// `*`, which would silently change route meaning — is a fatal config error
+/// (fail closed, I4).
+pub fn prefix_from_name(name: &str) -> Result<String, ConfigError> {
+    let Some(slash) = name.find('/') else {
+        return Ok(String::new());
+    };
+    let prefix = name[slash..].trim_end_matches('/');
+    if prefix.is_empty() {
+        return Ok(String::new());
+    }
+    if prefix.contains("//") || prefix.bytes().any(|b| matches!(b, b'{' | b'}' | b'*')) {
+        return Err(ConfigError::BadNamePrefix(name.to_string()));
+    }
+    Ok(prefix.to_string())
+}
+
 /// A fully validated runtime configuration (see module docs for the format).
 #[derive(Debug)]
 pub struct Config {
     /// Witness key name, embedded in every cosignature and vkey.
     pub name: String,
+    /// The HTTP API prefix derived from [`Config::name`] — the name's path
+    /// component, per C2SP tlog-witness (e.g. name `"witness.example/w1"` →
+    /// `"/w1"`). Empty for host-only names, where the API is served at the
+    /// listener root only. See [`prefix_from_name`].
+    pub prefix: String,
     /// Address the single HTTP listener binds.
     pub listen: SocketAddr,
     /// Path of the append-only state file.
@@ -156,6 +184,13 @@ pub enum ConfigError {
 
     #[error("invalid witness name: {0}")]
     InvalidName(#[from] KeygenError),
+
+    #[error(
+        "witness name {0:?} has an unusable path component: the API prefix is derived from \
+         the name's path (C2SP tlog-witness), and it must be a plain URL path — non-empty \
+         segments, no `{{`, `}}`, or `*` (HTTP router syntax characters)"
+    )]
+    BadNamePrefix(String),
 
     #[error("invalid listen address {0:?}: expected host:port (e.g. \"0.0.0.0:8080\")")]
     Listen(String),
@@ -301,6 +336,7 @@ pub fn validate_log_entry(origin: String, vkeys: Vec<String>) -> Result<LogConfi
 /// Validate a parsed config into its runtime form (split out for tests).
 fn validate(raw: RawConfig) -> Result<Config, ConfigError> {
     keygen::validate_name(&raw.name).map_err(ConfigError::InvalidName)?;
+    let prefix = prefix_from_name(&raw.name)?;
 
     let listen: SocketAddr = raw
         .listen
@@ -352,6 +388,7 @@ fn validate(raw: RawConfig) -> Result<Config, ConfigError> {
 
     Ok(Config {
         name: raw.name,
+        prefix,
         listen,
         state_file: raw.state_file,
         ed25519_seed: raw.keys.ed25519_seed,

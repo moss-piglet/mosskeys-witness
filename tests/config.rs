@@ -163,6 +163,54 @@ fn invalid_witness_name_is_fatal() {
     assert!(matches!(err, ConfigError::InvalidName(_)), "got {err:?}");
 }
 
+// --- The name-derived HTTP API prefix (C2SP tlog-witness) ---
+
+#[test]
+fn api_prefix_is_derived_from_the_witness_name() {
+    // C2SP tlog-witness: the API is served under the name's path component
+    // (and at the listener root for back-compat). A host-only name — or a
+    // trailing-slash one — serves at the root only.
+    let origin = "example.com/behind-the-sofa";
+    let vkey = log_vkey(origin);
+    let with_name = |name: &str| valid_config(origin, &vkey).replace("witness.example/w1", name);
+
+    let cfg = load_str(&valid_config(origin, &vkey)).unwrap();
+    assert_eq!(cfg.prefix, "/w1");
+
+    for (name, expected) in [
+        ("witness.example", ""),
+        ("witness.example/", ""),
+        ("witness.example/w1", "/w1"),
+        ("witness.example/w1/", "/w1"),
+        ("witness.example/a/b", "/a/b"),
+    ] {
+        let cfg = load_str(&with_name(name)).unwrap();
+        assert_eq!(cfg.prefix, expected, "name {name:?}");
+    }
+}
+
+#[test]
+fn unusable_name_path_is_fatal() {
+    // I4 fail-closed: a path component that is not a plain static URL path
+    // (empty segments, or the HTTP router's `{}`/`*` syntax characters)
+    // would silently change route meaning, so it is a fatal config error.
+    let origin = "example.com/behind-the-sofa";
+    let vkey = log_vkey(origin);
+    for name in [
+        "witness.example//w1",  // empty segment
+        "witness.example/{x}",  // router param syntax
+        "witness.example/*",    // router wildcard syntax
+        "witness.example/a*b}", // both syntax characters, mid-segment
+    ] {
+        let text = valid_config(origin, &vkey).replace("witness.example/w1", name);
+        let err = load_str(&text).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::BadNamePrefix(_)),
+            "name {name:?}: got {err:?}"
+        );
+    }
+}
+
 // --- Managed file (discovered_logs.toml) merge semantics ---
 
 /// A config + its directory, so tests can place a managed file next to the
